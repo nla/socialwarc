@@ -66,7 +66,7 @@ public record MediaAttachment(
 
     public Attachment toGenericMediaAttachment() {
         var sources = new ArrayList<Attachment.Source>();
-        MetaValue originalMeta = meta().original();
+        MetaValue originalMeta = meta == null ? null : meta.original();
         if (originalMeta != null) {
             sources.add(new Attachment.Source(url(),
                     null,

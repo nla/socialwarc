@@ -2,8 +2,10 @@ package org.netpreserve.warcana;
 
 import org.netpreserve.jwarc.WarcWriter;
 import org.netpreserve.jwarc.Warcinfo;
+import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.mastodon.MastodonAccountArchiver;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
+import org.netpreserve.warcana.mastodon.MastodonWarcJsonExtractor;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -14,7 +16,8 @@ import java.util.List;
 import java.util.Map;
 
 public class Warcana {
-    private static final String COMMAND = "archive-mastodon-account";
+    private static final String ARCHIVE_COMMAND = "archive-mastodon-account";
+    private static final String EXTRACT_COMMAND = "extract-mastodon-json";
     private static final String DEFAULT_USER_AGENT = "warcana/0.1.0";
 
     public static void main(String[] args) {
@@ -33,7 +36,10 @@ public class Warcana {
             usage(out);
             return 0;
         }
-        if (!COMMAND.equals(args[0])) {
+        if (EXTRACT_COMMAND.equals(args[0])) {
+            return runExtract(args, out, err);
+        }
+        if (!ARCHIVE_COMMAND.equals(args[0])) {
             err.println("Unknown command: " + args[0]);
             usage(err);
             return 2;
@@ -96,6 +102,66 @@ public class Warcana {
         }
     }
 
+    private static int runExtract(String[] args, PrintStream out, PrintStream err) {
+        Path input = null;
+        Path output = null;
+        boolean force = false;
+        boolean pretty = false;
+
+        try {
+            for (int i = 1; i < args.length; i++) {
+                switch (args[i]) {
+                    case "-h", "--help" -> {
+                        extractUsage(out);
+                        return 0;
+                    }
+                    case "-o", "--output" -> output = Path.of(requireValue(args, ++i, args[i - 1]));
+                    case "-f", "--force" -> force = true;
+                    case "--pretty" -> pretty = true;
+                    default -> {
+                        if (args[i].startsWith("-")) {
+                            throw new IllegalArgumentException("Unknown option: " + args[i]);
+                        }
+                        if (input != null) {
+                            throw new IllegalArgumentException("Only one WARC file may be read at a time");
+                        }
+                        input = Path.of(args[i]);
+                    }
+                }
+            }
+
+            if (input == null) {
+                throw new IllegalArgumentException("Missing WARC file");
+            }
+            if (!Files.isRegularFile(input)) {
+                throw new IllegalArgumentException("WARC file does not exist: " + input);
+            }
+            if (output != null && Files.exists(output) && !force) {
+                throw new IllegalArgumentException(
+                        "Output already exists: " + output + " (use --force to replace it)");
+            }
+
+            var results = new MastodonWarcJsonExtractor().extract(input);
+            byte[] json = pretty
+                    ? SocialJson.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(results)
+                    : SocialJson.mapper.writeValueAsBytes(results);
+            if (output == null) {
+                out.write(json);
+                out.println();
+            } else {
+                Files.write(output, json);
+                out.printf("Extracted %d posts to %s%n", results.totalHits(), output.toAbsolutePath());
+            }
+            return 0;
+        } catch (IllegalArgumentException e) {
+            err.println("error: " + e.getMessage());
+            return 2;
+        } catch (IOException e) {
+            err.println("extraction failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
     private static MastodonAccountArchiver.ArchiveResult archive(
             MastodonAccountReference reference, Path output,
             String userAgent, int pageSize) throws IOException {
@@ -129,13 +195,15 @@ public class Warcana {
         stream.println("Usage: warcana <command> [options]");
         stream.println();
         stream.println("Commands:");
-        stream.println("  " + COMMAND + "  Archive a Mastodon account to WARC");
+        stream.printf("  %-28s %s%n", ARCHIVE_COMMAND, "Archive a Mastodon account to WARC");
+        stream.printf("  %-28s %s%n", EXTRACT_COMMAND,
+                "Extract common-model JSON from a Mastodon WARC");
         stream.println();
-        stream.println("Run 'warcana " + COMMAND + " --help' for command options.");
+        stream.println("Run 'warcana <command> --help' for command options.");
     }
 
     private static void archiveUsage(PrintStream stream) {
-        stream.println("Usage: warcana " + COMMAND + " [options] ACCOUNT");
+        stream.println("Usage: warcana " + ARCHIVE_COMMAND + " [options] ACCOUNT");
         stream.println();
         stream.println("ACCOUNT may be @user@server or https://server/@user.");
         stream.println();
@@ -145,5 +213,18 @@ public class Warcana {
         stream.println("  --page-size NUMBER      Statuses per API request, 1-40 (default: 40)");
         stream.println("  -f, --force             Replace an existing output file");
         stream.println("  -h, --help              Show this help");
+    }
+
+    private static void extractUsage(PrintStream stream) {
+        stream.println("Usage: warcana " + EXTRACT_COMMAND + " [options] WARC_FILE");
+        stream.println();
+        stream.println("Extracts Mastodon account statuses as common-model SocialResults JSON.");
+        stream.println("Writes JSON to stdout unless --output is specified.");
+        stream.println();
+        stream.println("Options:");
+        stream.println("  -o, --output FILE  Write JSON to FILE instead of stdout");
+        stream.println("  --pretty           Pretty-print the JSON");
+        stream.println("  -f, --force        Replace an existing output file");
+        stream.println("  -h, --help         Show this help");
     }
 }
