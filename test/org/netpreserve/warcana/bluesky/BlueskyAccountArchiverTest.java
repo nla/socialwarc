@@ -1,6 +1,9 @@
 package org.netpreserve.warcana.bluesky;
 
 import org.junit.jupiter.api.Test;
+import org.netpreserve.warcana.bluesky.model.FeedPage;
+import org.netpreserve.warcana.bluesky.model.FeedItem;
+import org.netpreserve.warcana.bluesky.model.Profile;
 import org.netpreserve.warcana.common.SocialJson;
 
 import java.io.IOException;
@@ -73,10 +76,35 @@ class BlueskyAccountArchiverTest {
             cursors.add(cursor);
             if (cursor == null) {
                 return new FeedPage("next-page", List.of(
-                        SocialJson.mapper.createObjectNode(),
-                        SocialJson.mapper.createObjectNode()));
+                        feedItem("one"),
+                        feedItem("two")));
             }
-            return new FeedPage(null, List.of(SocialJson.mapper.createObjectNode()));
+            return new FeedPage(null, List.of(feedItem("three")));
+        }
+
+        private FeedItem feedItem(String recordKey) throws IOException {
+            return SocialJson.mapper.readValue("""
+                    {
+                      "post": {
+                        "uri": "at://did:plc:example/app.bsky.feed.post/%s",
+                        "cid": "cid-%s",
+                        "author": {
+                          "did": "did:plc:example",
+                          "handle": "alice.example"
+                        },
+                        "record": {
+                          "$type": "app.bsky.feed.post",
+                          "text": "Example",
+                          "createdAt": "2026-07-30T07:00:00Z"
+                        },
+                        "replyCount": 0,
+                        "repostCount": 0,
+                        "likeCount": 0,
+                        "quoteCount": 0,
+                        "indexedAt": "2026-07-30T07:00:01Z"
+                      }
+                    }
+                    """.formatted(recordKey, recordKey), FeedItem.class);
         }
     }
 }

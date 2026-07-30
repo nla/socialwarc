@@ -7,6 +7,8 @@ import dev.failsafe.RetryPolicy;
 import org.netpreserve.jwarc.HttpRequest;
 import org.netpreserve.jwarc.HttpResponse;
 import org.netpreserve.jwarc.WarcWriter;
+import org.netpreserve.warcana.bluesky.model.FeedPage;
+import org.netpreserve.warcana.bluesky.model.Profile;
 import org.netpreserve.warcana.common.SocialJson;
 
 import java.io.ByteArrayInputStream;

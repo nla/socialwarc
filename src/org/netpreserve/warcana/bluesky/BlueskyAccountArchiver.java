@@ -1,6 +1,8 @@
 package org.netpreserve.warcana.bluesky;
 
 import org.netpreserve.jwarc.WarcWriter;
+import org.netpreserve.warcana.bluesky.model.FeedPage;
+import org.netpreserve.warcana.bluesky.model.Profile;
 
 import java.io.IOException;
 import java.util.HashSet;

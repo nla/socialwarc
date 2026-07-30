@@ -1,3 +1,5 @@
 /.idea
 /target
 /data
+*.warc
+*.warc.gz

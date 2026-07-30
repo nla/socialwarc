@@ -142,6 +142,49 @@ class WarcanaTest {
         Files.delete(jsonOutput);
     }
 
+    @Test
+    void extractsBlueskyFeedFromWarcAsCommonModelJson() throws Exception {
+        var warc = Files.createTempFile("warcana-bluesky-input-", ".warc");
+        var jsonOutput = Files.createTempFile("warcana-bluesky-output-", ".json");
+        Files.delete(jsonOutput);
+
+        try (var writer = new WarcWriter(warc)) {
+            var http = new HttpResponse.Builder(200, "OK")
+                    .body(MediaType.JSON, blueskyFeedJson().getBytes(StandardCharsets.UTF_8))
+                    .build();
+            writer.write(new WarcResponse.Builder(
+                    "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed" +
+                            "?actor=did%3Aplc%3Aexample&limit=100")
+                    .body(http)
+                    .build());
+        }
+
+        var stdout = new ByteArrayOutputStream();
+        var stderr = new ByteArrayOutputStream();
+        int result = Warcana.run(new String[]{
+                        "extract-bluesky-json",
+                        "--pretty",
+                        "--output", jsonOutput.toString(),
+                        warc.toString()
+                },
+                new PrintStream(stdout),
+                new PrintStream(stderr));
+
+        assertEquals(0, result, stderr.toString(StandardCharsets.UTF_8));
+        var json = SocialJson.mapper.readTree(jsonOutput);
+        var post = json.get("posts").get(0);
+        assertEquals(1, json.get("totalHits").asInt());
+        assertEquals("https://bsky.app/profile/alice.example/post/example-post",
+                post.get("url").asText());
+        assertEquals("alice.example", post.get("author").get("username").asText());
+        assertEquals("Bluesky", post.get("site").get("name").asText());
+        assertEquals("Example post", post.get("content").asText());
+        assertEquals("image", post.get("attachments").get(0).get("type").asText());
+
+        Files.delete(warc);
+        Files.delete(jsonOutput);
+    }
+
     private static String mastodonStatusJson() {
         return """
                 {
@@ -172,6 +215,44 @@ class WarcanaTest {
                   "reblogs_count": 2,
                   "favourites_count": 3,
                   "replies_count": 1
+                }
+                """;
+    }
+
+    private static String blueskyFeedJson() {
+        return """
+                {
+                  "feed": [{
+                    "post": {
+                      "uri": "at://did:plc:example/app.bsky.feed.post/example-post",
+                      "cid": "example-cid",
+                      "author": {
+                        "did": "did:plc:example",
+                        "handle": "alice.example",
+                        "displayName": "Alice Example",
+                        "avatar": "https://cdn.example/avatar.png"
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "Example post",
+                        "createdAt": "2026-07-30T07:00:00Z"
+                      },
+                      "embed": {
+                        "$type": "app.bsky.embed.images#view",
+                        "images": [{
+                          "thumb": "https://cdn.example/image-thumb.jpg",
+                          "fullsize": "https://cdn.example/image.jpg",
+                          "alt": "Example image",
+                          "aspectRatio": {"width": 800, "height": 600}
+                        }]
+                      },
+                      "replyCount": 1,
+                      "repostCount": 2,
+                      "likeCount": 3,
+                      "quoteCount": 4,
+                      "indexedAt": "2026-07-30T07:00:01Z"
+                    }
+                  }]
                 }
                 """;
     }

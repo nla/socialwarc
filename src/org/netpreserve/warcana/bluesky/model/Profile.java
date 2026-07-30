@@ -1,4 +1,4 @@
-package org.netpreserve.warcana.bluesky;
+package org.netpreserve.warcana.bluesky.model;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;

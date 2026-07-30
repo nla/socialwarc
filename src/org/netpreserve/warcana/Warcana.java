@@ -5,6 +5,7 @@ import org.netpreserve.jwarc.Warcinfo;
 import org.netpreserve.warcana.bluesky.AtProtocolClient;
 import org.netpreserve.warcana.bluesky.BlueskyAccountArchiver;
 import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
+import org.netpreserve.warcana.bluesky.BlueskyWarcJsonExtractor;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.mastodon.MastodonAccountArchiver;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
@@ -22,6 +23,7 @@ public class Warcana {
     private static final String ARCHIVE_COMMAND = "archive-mastodon-account";
     private static final String BLUESKY_ARCHIVE_COMMAND = "archive-bluesky-account";
     private static final String EXTRACT_COMMAND = "extract-mastodon-json";
+    private static final String BLUESKY_EXTRACT_COMMAND = "extract-bluesky-json";
     private static final String DEFAULT_USER_AGENT = "warcana/0.1.0";
 
     public static void main(String[] args) {
@@ -41,7 +43,10 @@ public class Warcana {
             return 0;
         }
         if (EXTRACT_COMMAND.equals(args[0])) {
-            return runExtract(args, out, err);
+            return runExtract(args, out, err, false);
+        }
+        if (BLUESKY_EXTRACT_COMMAND.equals(args[0])) {
+            return runExtract(args, out, err, true);
         }
         if (BLUESKY_ARCHIVE_COMMAND.equals(args[0])) {
             return runArchiveBluesky(args, out, err);
@@ -169,7 +174,8 @@ public class Warcana {
         }
     }
 
-    private static int runExtract(String[] args, PrintStream out, PrintStream err) {
+    private static int runExtract(String[] args, PrintStream out, PrintStream err,
+                                  boolean bluesky) {
         Path input = null;
         Path output = null;
         boolean force = false;
@@ -179,7 +185,7 @@ public class Warcana {
             for (int i = 1; i < args.length; i++) {
                 switch (args[i]) {
                     case "-h", "--help" -> {
-                        extractUsage(out);
+                        extractUsage(out, bluesky);
                         return 0;
                     }
                     case "-o", "--output" -> output = Path.of(requireValue(args, ++i, args[i - 1]));
@@ -208,7 +214,9 @@ public class Warcana {
                         "Output already exists: " + output + " (use --force to replace it)");
             }
 
-            var results = new MastodonWarcJsonExtractor().extract(input);
+            var results = bluesky
+                    ? new BlueskyWarcJsonExtractor().extract(input)
+                    : new MastodonWarcJsonExtractor().extract(input);
             byte[] json = pretty
                     ? SocialJson.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(results)
                     : SocialJson.mapper.writeValueAsBytes(results);
@@ -288,6 +296,8 @@ public class Warcana {
                 "Archive a Bluesky account to WARC");
         stream.printf("  %-28s %s%n", EXTRACT_COMMAND,
                 "Extract common-model JSON from a Mastodon WARC");
+        stream.printf("  %-28s %s%n", BLUESKY_EXTRACT_COMMAND,
+                "Extract common-model JSON from a Bluesky WARC");
         stream.println();
         stream.println("Run 'warcana <command> --help' for command options.");
     }
@@ -305,10 +315,13 @@ public class Warcana {
         stream.println("  -h, --help              Show this help");
     }
 
-    private static void extractUsage(PrintStream stream) {
-        stream.println("Usage: warcana " + EXTRACT_COMMAND + " [options] WARC_FILE");
+    private static void extractUsage(PrintStream stream, boolean bluesky) {
+        String command = bluesky ? BLUESKY_EXTRACT_COMMAND : EXTRACT_COMMAND;
+        String service = bluesky ? "Bluesky" : "Mastodon";
+        stream.println("Usage: warcana " + command + " [options] WARC_FILE");
         stream.println();
-        stream.println("Extracts Mastodon account statuses as common-model SocialResults JSON.");
+        stream.println("Extracts " + service +
+                " account posts as common-model SocialResults JSON.");
         stream.println("Writes JSON to stdout unless --output is specified.");
         stream.println();
         stream.println("Options:");
