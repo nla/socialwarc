@@ -5,6 +5,7 @@ import org.netpreserve.jwarc.HttpResponse;
 import org.netpreserve.jwarc.MediaType;
 import org.netpreserve.jwarc.WarcResponse;
 import org.netpreserve.jwarc.WarcWriter;
+import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
 import org.netpreserve.warcana.mastodon.model.Status;
@@ -29,6 +30,17 @@ class WarcanaTest {
         assertEquals(
                 new MastodonAccountReference("https://example.social", "alice"),
                 MastodonAccountReference.parse("https://example.social/@alice"));
+    }
+
+    @Test
+    void parsesBlueskyHandlesAndProfileUrls() {
+        assertEquals(
+                new BlueskyAccountReference("alice.example"),
+                BlueskyAccountReference.parse("@alice.example"));
+        assertEquals(
+                new BlueskyAccountReference("alice.example"),
+                BlueskyAccountReference.parse(
+                        "https://bsky.app/profile/alice.example"));
     }
 
     @Test

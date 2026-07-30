@@ -113,7 +113,15 @@ public class MastodonClient {
 
     @NonNull
     private <T> T sendRequest(String path, Class<T> returnType) throws IOException {
-        HttpResponse httpResponse = failsafe.get(() -> sendRequestInner(path));
+        HttpResponse httpResponse;
+        try {
+            httpResponse = failsafe.get(() -> sendRequestInner(path));
+        } catch (FailsafeException e) {
+            if (e.getCause() instanceof IOException ioException) {
+                throw ioException;
+            }
+            throw new IOException("Mastodon request failed", e.getCause());
+        }
         if (httpResponse.status() != 200) {
             throw new IOException("Unexpected response " + httpResponse.status() + " " + httpResponse.reason() + " from " + server + path);
         }
