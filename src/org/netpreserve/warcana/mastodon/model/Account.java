@@ -8,6 +8,7 @@ import tools.jackson.databind.annotation.JsonNaming;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT;
@@ -51,6 +52,27 @@ public record Account(
                 displayName,
                 avatar,
                 header);
+    }
+
+    public List<String> mediaUrls() {
+        var urls = new LinkedHashSet<String>();
+        addUrl(urls, avatar);
+        addUrl(urls, avatarStatic);
+        addUrl(urls, header);
+        addUrl(urls, headerStatic);
+        if (emojis != null) {
+            for (CustomEmoji emoji : emojis) {
+                addUrl(urls, emoji.url());
+                addUrl(urls, emoji.staticUrl());
+            }
+        }
+        return List.copyOf(urls);
+    }
+
+    private static void addUrl(LinkedHashSet<String> urls, String value) {
+        if (value != null && !value.isBlank()) {
+            urls.add(value);
+        }
     }
 
     // https://docs.joinmastodon.org/entities/Account/#Field

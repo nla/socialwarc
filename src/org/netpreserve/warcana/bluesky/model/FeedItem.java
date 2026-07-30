@@ -6,6 +6,8 @@ import org.netpreserve.warcana.common.model.Post;
 import org.netpreserve.warcana.common.model.Site;
 
 import java.time.Instant;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Collections;
 
 public record FeedItem(
@@ -43,6 +45,23 @@ public record FeedItem(
             return reason.by().did() + ":" + post.uri();
         }
         return post.uri();
+    }
+
+    public List<String> mediaUrls() {
+        return mediaUrls(true);
+    }
+
+    public List<String> mediaUrls(boolean includeVideo) {
+        var urls = new LinkedHashSet<>(post.mediaUrls(includeVideo));
+        if (reason != null && reason.by() != null) {
+            if (reason.by().avatar() != null && !reason.by().avatar().isBlank()) {
+                urls.add(reason.by().avatar());
+            }
+            if (reason.by().banner() != null && !reason.by().banner().isBlank()) {
+                urls.add(reason.by().banner());
+            }
+        }
+        return List.copyOf(urls);
     }
 
     public record Reason(

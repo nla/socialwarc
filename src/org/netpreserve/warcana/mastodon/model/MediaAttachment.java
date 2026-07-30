@@ -9,6 +9,7 @@ import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
 import java.util.ArrayList;
+import java.util.List;
 
 // https://docs.joinmastodon.org/entities/MediaAttachment/
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -75,5 +76,22 @@ public record MediaAttachment(
                     originalMeta.height()));
         }
         return new Attachment(url, type, description, sources);
+    }
+
+    public List<String> mediaUrls() {
+        return mediaUrls(true);
+    }
+
+    public List<String> mediaUrls(boolean includeVideo) {
+        boolean video = "video".equalsIgnoreCase(type) ||
+                "gifv".equalsIgnoreCase(type);
+        return java.util.stream.Stream.of(
+                        includeVideo || !video ? url : null,
+                        previewUrl,
+                        previewRemoteUrl,
+                        includeVideo || !video ? remoteUrl : null)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .toList();
     }
 }

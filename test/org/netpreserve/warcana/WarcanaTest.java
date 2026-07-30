@@ -6,6 +6,7 @@ import org.netpreserve.jwarc.MediaType;
 import org.netpreserve.jwarc.WarcResponse;
 import org.netpreserve.jwarc.WarcWriter;
 import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
+import org.netpreserve.warcana.bluesky.model.PostView;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
 import org.netpreserve.warcana.mastodon.model.Status;
@@ -115,6 +116,72 @@ class WarcanaTest {
         assertEquals("100", status.id());
         assertEquals("alice", status.account().username());
         assertEquals("2026-07-30T07:00:00Z", status.createdAt().toString());
+    }
+
+    @Test
+    void discoversMastodonMediaOriginalsPreviewsAndProfileImages() throws Exception {
+        Status status = SocialJson.mapper.readValue(mastodonStatusJson(), Status.class);
+
+        assertEquals(
+                java.util.List.of(
+                        "https://example.social/avatar.png",
+                        "https://media.example/attachment.mp4",
+                        "https://media.example/attachment-preview.jpg"),
+                status.mediaUrls());
+        assertEquals(
+                java.util.List.of(
+                        "https://example.social/avatar.png",
+                        "https://media.example/attachment-preview.jpg"),
+                status.mediaUrls(false));
+    }
+
+    @Test
+    void excludesBlueskyVideoButRetainsItsThumbnail() throws Exception {
+        var embed = SocialJson.mapper.readTree("""
+                {
+                  "$type": "app.bsky.embed.video#view",
+                  "playlist": "https://video.example/master.m3u8",
+                  "thumbnail": "https://video.example/thumbnail.jpg"
+                }
+                """);
+        var post = new PostView(
+                "", "", null, null, embed,
+                0, 0, 0, 0, null);
+
+        assertEquals(
+                java.util.List.of("https://video.example/thumbnail.jpg"),
+                post.mediaUrls(false));
+        assertEquals(
+                java.util.List.of(
+                        "https://video.example/master.m3u8",
+                        "https://video.example/thumbnail.jpg"),
+                post.mediaUrls());
+    }
+
+    @Test
+    void rejectsConflictingVideoArchiveOptions() {
+        var stdout = new ByteArrayOutputStream();
+        var stderr = new ByteArrayOutputStream();
+
+        int result = Warcana.run(new String[]{
+                        "archive",
+                        "--exclude-video",
+                        "--all-video-variants",
+                        "@alice.example"
+                },
+                new PrintStream(stdout),
+                new PrintStream(stderr));
+
+        assertEquals(2, result);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("cannot be used together"));
+    }
+
+    @Test
+    void parsesMediaByteLimits() {
+        assertEquals(42, Warcana.parseByteSize("42"));
+        assertEquals(10L * 1024 * 1024, Warcana.parseByteSize("10M"));
+        assertEquals(2L * 1024 * 1024 * 1024, Warcana.parseByteSize("2 GiB"));
     }
 
     @Test
@@ -271,7 +338,12 @@ class WarcanaTest {
                   "visibility": "public",
                   "sensitive": false,
                   "spoiler_text": "",
-                  "media_attachments": [],
+                  "media_attachments": [{
+                    "id": "media-1",
+                    "type": "video",
+                    "url": "https://media.example/attachment.mp4",
+                    "preview_url": "https://media.example/attachment-preview.jpg"
+                  }],
                   "mentions": [],
                   "tags": [],
                   "emojis": [],

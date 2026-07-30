@@ -9,6 +9,7 @@ import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 // https://docs.joinmastodon.org/entities/Status/
@@ -92,5 +93,39 @@ public record Status(
                 null,
                 favouritesCount
         );
+    }
+
+    public List<String> mediaUrls() {
+        return mediaUrls(true);
+    }
+
+    public List<String> mediaUrls(boolean includeVideo) {
+        var urls = new LinkedHashSet<String>(account.mediaUrls());
+        for (MediaAttachment attachment : mediaAttachments) {
+            urls.addAll(attachment.mediaUrls(includeVideo));
+        }
+        for (CustomEmoji emoji : emojis) {
+            addUrl(urls, emoji.url());
+            addUrl(urls, emoji.staticUrl());
+        }
+        if (poll != null && poll.emojis() != null) {
+            for (CustomEmoji emoji : poll.emojis()) {
+                addUrl(urls, emoji.url());
+                addUrl(urls, emoji.staticUrl());
+            }
+        }
+        if (card != null) {
+            addUrl(urls, card.image());
+        }
+        if (reblog != null) {
+            urls.addAll(reblog.mediaUrls(includeVideo));
+        }
+        return List.copyOf(urls);
+    }
+
+    private static void addUrl(LinkedHashSet<String> urls, String value) {
+        if (value != null && !value.isBlank()) {
+            urls.add(value);
+        }
     }
 }

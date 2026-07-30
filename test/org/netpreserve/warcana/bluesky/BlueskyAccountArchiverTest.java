@@ -4,11 +4,15 @@ import org.junit.jupiter.api.Test;
 import org.netpreserve.warcana.bluesky.model.FeedPage;
 import org.netpreserve.warcana.bluesky.model.FeedItem;
 import org.netpreserve.warcana.bluesky.model.Profile;
+import org.netpreserve.warcana.common.MediaCaptureStats;
+import org.netpreserve.warcana.common.MediaSink;
 import org.netpreserve.warcana.common.SocialJson;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -17,7 +21,9 @@ class BlueskyAccountArchiverTest {
     @Test
     void resolvesHandleToDidAndPaginatesAuthorFeed() throws Exception {
         var api = new FakeApi();
-        var archiver = new BlueskyAccountArchiver(api, 100);
+        var media = new RecordingMediaSink();
+        var progress = new ArrayList<String>();
+        var archiver = new BlueskyAccountArchiver(api, 100, media, progress::add);
 
         var result = archiver.archive("alice.example");
 
@@ -27,6 +33,20 @@ class BlueskyAccountArchiverTest {
         assertEquals(3, result.feedItemsArchived());
         assertEquals(2, result.pagesFetched());
         assertEquals("alice.example", result.profile().handle());
+        assertEquals(3, result.media().captured());
+        assertEquals(List.of(
+                        "https://cdn.example/avatar.png",
+                        "https://cdn.example/image.jpg",
+                        "https://cdn.example/image-thumb.jpg"),
+                List.copyOf(media.urls));
+        assertEquals(List.of(
+                        "Looking up Bluesky account: alice.example",
+                        "Found Bluesky account: alice.example",
+                        "Fetching Bluesky feed page 1...",
+                        "Fetched 2 feed items (2 total)",
+                        "Fetching Bluesky feed page 2...",
+                        "Fetched 1 feed item (3 total)"),
+                progress);
     }
 
     @Test
@@ -63,7 +83,7 @@ class BlueskyAccountArchiverTest {
                     "alice.example",
                     "Alice Example",
                     null,
-                    null,
+                    "https://cdn.example/avatar.png",
                     null,
                     0,
                     0,
@@ -97,6 +117,14 @@ class BlueskyAccountArchiverTest {
                           "text": "Example",
                           "createdAt": "2026-07-30T07:00:00Z"
                         },
+                        "embed": {
+                          "$type": "app.bsky.embed.images#view",
+                          "images": [{
+                            "fullsize": "https://cdn.example/image.jpg",
+                            "thumb": "https://cdn.example/image-thumb.jpg",
+                            "alt": "Example image"
+                          }]
+                        },
                         "replyCount": 0,
                         "repostCount": 0,
                         "likeCount": 0,
@@ -105,6 +133,20 @@ class BlueskyAccountArchiverTest {
                       }
                     }
                     """.formatted(recordKey, recordKey), FeedItem.class);
+        }
+    }
+
+    private static class RecordingMediaSink implements MediaSink {
+        private final LinkedHashSet<String> urls = new LinkedHashSet<>();
+
+        @Override
+        public void captureAll(Collection<String> urls) {
+            this.urls.addAll(urls);
+        }
+
+        @Override
+        public MediaCaptureStats stats() {
+            return new MediaCaptureStats(urls.size(), 0, 0, 0);
         }
     }
 }

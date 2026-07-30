@@ -9,6 +9,7 @@ import tools.jackson.databind.JsonNode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 public record PostView(
@@ -48,6 +49,76 @@ public record PostView(
         int slash = uri.lastIndexOf('/');
         String recordKey = slash < 0 ? uri : uri.substring(slash + 1);
         return "https://bsky.app/profile/" + author.handle() + "/post/" + recordKey;
+    }
+
+    public List<String> mediaUrls() {
+        return mediaUrls(true);
+    }
+
+    public List<String> mediaUrls(boolean includeVideo) {
+        var urls = new LinkedHashSet<String>();
+        collectMediaUrls(embed, urls, includeVideo);
+        if (author != null) {
+            addUrl(urls, author.avatar());
+            addUrl(urls, author.banner());
+        }
+        return List.copyOf(urls);
+    }
+
+    private static void collectMediaUrls(
+            JsonNode node, LinkedHashSet<String> urls, boolean includeVideo) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                collectMediaUrls(child, urls, includeVideo);
+            }
+            return;
+        }
+
+        String type = node.path("$type").asText();
+        switch (type) {
+            case "app.bsky.embed.images#view" -> {
+                for (JsonNode image : node.path("images")) {
+                    addUrl(urls, textOrNull(image, "fullsize"));
+                    addUrl(urls, textOrNull(image, "thumb"));
+                }
+            }
+            case "app.bsky.embed.video#view" -> {
+                if (includeVideo) {
+                    addUrl(urls, textOrNull(node, "playlist"));
+                }
+                addUrl(urls, textOrNull(node, "thumbnail"));
+            }
+            case "app.bsky.embed.external#view" ->
+                    addUrl(urls, textOrNull(node.path("external"), "thumb"));
+            case "app.bsky.embed.recordWithMedia#view" -> {
+                collectMediaUrls(node.get("media"), urls, includeVideo);
+                collectMediaUrls(node.get("record"), urls, includeVideo);
+            }
+            case "app.bsky.embed.record#view" ->
+                    collectMediaUrls(node.get("record"), urls, includeVideo);
+            case "app.bsky.embed.record#viewRecord" -> {
+                JsonNode authorNode = node.path("author");
+                addUrl(urls, textOrNull(authorNode, "avatar"));
+                addUrl(urls, textOrNull(authorNode, "banner"));
+                collectMediaUrls(node.get("embeds"), urls, includeVideo);
+                collectMediaUrls(node.path("value").get("embed"), urls, includeVideo);
+            }
+            default -> {
+                // Unknown embed types may wrap a standard view under these fields.
+                collectMediaUrls(node.get("media"), urls, includeVideo);
+                collectMediaUrls(node.get("record"), urls, includeVideo);
+                collectMediaUrls(node.get("embeds"), urls, includeVideo);
+            }
+        }
+    }
+
+    private static void addUrl(LinkedHashSet<String> urls, String value) {
+        if (value != null && !value.isBlank()) {
+            urls.add(value);
+        }
     }
 
     private static List<Attachment> attachments(JsonNode embed) {
