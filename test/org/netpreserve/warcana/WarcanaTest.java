@@ -15,6 +15,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.attribute.FileTime;
+import java.util.Comparator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -313,6 +315,211 @@ class WarcanaTest {
 
         Files.delete(warc);
         Files.delete(jsonOutput);
+    }
+
+    @Test
+    void buildsReusesAndFiltersFullTextSearchIndex() throws Exception {
+        var temporary = Files.createTempDirectory("warcana-search-");
+        var warc = temporary.resolve("mixed.warc");
+        var index = temporary.resolve("mixed.index");
+        try {
+            try (var writer = new WarcWriter(warc)) {
+                var mastodonHttp = new HttpResponse.Builder(200, "OK")
+                        .body(MediaType.JSON,
+                                ("[" + mastodonStatusJson() + "]")
+                                        .getBytes(StandardCharsets.UTF_8))
+                        .build();
+                writer.write(new WarcResponse.Builder(
+                        "https://example.social/api/v1/accounts/42/statuses?limit=40")
+                        .body(mastodonHttp)
+                        .build());
+
+                var blueskyHttp = new HttpResponse.Builder(200, "OK")
+                        .body(MediaType.JSON,
+                                blueskyFeedJson()
+                                        .replace("2026-07-30", "2026-07-31")
+                                        .getBytes(StandardCharsets.UTF_8))
+                        .build();
+                writer.write(new WarcResponse.Builder(
+                        "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed" +
+                                "?actor=did%3Aplc%3Aexample&limit=100")
+                        .body(blueskyHttp)
+                        .build());
+            }
+
+            var stdout = new ByteArrayOutputStream();
+            var stderr = new ByteArrayOutputStream();
+            int firstResult = Warcana.run(new String[]{
+                            "search",
+                            "--index", index.toString(),
+                            "--author", "@alice@example.social",
+                            "--format", "json",
+                            warc.toString(),
+                            "Hello"
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+
+            assertEquals(0, firstResult, stderr.toString(StandardCharsets.UTF_8));
+            var firstJson = SocialJson.mapper.readTree(stdout.toByteArray());
+            assertEquals(1, firstJson.get("totalHits").asInt());
+            assertEquals("mastodon",
+                    firstJson.get("hits").get(0).get("platform").asText());
+            assertTrue(firstJson.get("hits").get(0).get("snippet").asText()
+                    .contains("<b>Hello</b>"));
+            assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                    .contains("Building search index"));
+
+            stdout.reset();
+            stderr.reset();
+            int secondResult = Warcana.run(new String[]{
+                            "search",
+                            "--index", index.toString(),
+                            "--platform", "bluesky",
+                            "--author", "alice.example",
+                            "--since", "2026-07-30",
+                            "--until", "2026-07-31",
+                            "--has-media",
+                            "--format", "json",
+                            warc.toString(),
+                            "Example"
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+
+            assertEquals(0, secondResult, stderr.toString(StandardCharsets.UTF_8));
+            var secondJson = SocialJson.mapper.readTree(stdout.toByteArray());
+            assertEquals(1, secondJson.get("totalHits").asInt());
+            assertEquals("bluesky",
+                    secondJson.get("hits").get(0).get("platform").asText());
+            assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                    .contains("Using search index"));
+
+            stdout.reset();
+            stderr.reset();
+            int recentResult = Warcana.run(new String[]{
+                            "search",
+                            "--index", index.toString(),
+                            "--format", "json",
+                            warc.toString()
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+
+            assertEquals(0, recentResult, stderr.toString(StandardCharsets.UTF_8));
+            var recentJson = SocialJson.mapper.readTree(stdout.toByteArray());
+            assertEquals(2, recentJson.get("totalHits").asInt());
+            assertEquals("bluesky",
+                    recentJson.get("hits").get(0).get("platform").asText());
+            assertEquals("2026-07-31T07:00:00Z",
+                    recentJson.get("hits").get(0).get("post")
+                            .get("createdAt").asText());
+            assertTrue(recentJson.get("hits").get(0).get("score").isNull());
+            assertEquals("mastodon",
+                    recentJson.get("hits").get(1).get("platform").asText());
+
+            stdout.reset();
+            stderr.reset();
+            Files.setLastModifiedTime(
+                    warc,
+                    FileTime.fromMillis(
+                            Files.getLastModifiedTime(warc).toMillis() + 5_000));
+            int staleResult = Warcana.run(new String[]{
+                            "search",
+                            "--index", index.toString(),
+                            warc.toString(),
+                            "Example"
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+
+            assertEquals(0, staleResult, stderr.toString(StandardCharsets.UTF_8));
+            assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                    .contains("Building search index"));
+        } finally {
+            if (Files.exists(temporary)) {
+                try (var paths = Files.walk(temporary)) {
+                    for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                        Files.delete(path);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void textSearchOutputDecodesHtmlEntitiesWithoutLosingHighlights() throws Exception {
+        var temporary = Files.createTempDirectory("warcana-search-entities-");
+        var warc = temporary.resolve("mastodon.warc");
+        var index = temporary.resolve("mastodon.index");
+        try {
+            String status = mastodonStatusJson()
+                    .replace(
+                            "<p>Hello</p>",
+                            "<p>A Venn diagram with owners &amp; people who aren&#39;t owners.</p>");
+            try (var writer = new WarcWriter(warc)) {
+                var http = new HttpResponse.Builder(200, "OK")
+                        .body(
+                                MediaType.JSON,
+                                ("[" + status + "]").getBytes(StandardCharsets.UTF_8))
+                        .build();
+                writer.write(new WarcResponse.Builder(
+                        "https://example.social/api/v1/accounts/42/statuses?limit=40")
+                        .body(http)
+                        .build());
+            }
+
+            var stdout = new ByteArrayOutputStream();
+            var stderr = new ByteArrayOutputStream();
+            int result = Warcana.run(new String[]{
+                            "search",
+                            "--quiet",
+                            "--index", index.toString(),
+                            warc.toString(),
+                            "Venn"
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+
+            assertEquals(0, result, stderr.toString(StandardCharsets.UTF_8));
+            String text = stdout.toString(StandardCharsets.UTF_8);
+            assertTrue(text.contains("[Venn] diagram"));
+            assertTrue(text.contains("owners & people"));
+            assertTrue(text.contains("who aren't owners"));
+            assertTrue(text.lines()
+                    .filter(line -> line.startsWith("@alice · mastodon"))
+                    .findFirst()
+                    .orElseThrow()
+                    .endsWith("https://example.social/@alice/100"));
+            assertTrue(!text.contains("&amp;"));
+            assertTrue(!text.contains("&#"));
+
+            stdout.reset();
+            int colorResult = Warcana.run(new String[]{
+                            "search",
+                            "--quiet",
+                            "--color", "always",
+                            "--index", index.toString(),
+                            warc.toString(),
+                            "Venn"
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+
+            assertEquals(0, colorResult, stderr.toString(StandardCharsets.UTF_8));
+            String colored = stdout.toString(StandardCharsets.UTF_8);
+            assertTrue(colored.contains("\u001b[1m1 result\u001b[0m"));
+            assertTrue(colored.contains("\u001b[1;33mVenn\u001b[0m"));
+            assertTrue(colored.contains("owners & people"));
+        } finally {
+            if (Files.exists(temporary)) {
+                try (var paths = Files.walk(temporary)) {
+                    for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                        Files.delete(path);
+                    }
+                }
+            }
+        }
     }
 
     private static String mastodonStatusJson() {

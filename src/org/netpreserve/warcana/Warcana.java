@@ -2,6 +2,7 @@ package org.netpreserve.warcana;
 
 import org.netpreserve.jwarc.WarcWriter;
 import org.netpreserve.jwarc.Warcinfo;
+import org.jsoup.nodes.Entities;
 import org.netpreserve.warcana.bluesky.AtProtocolClient;
 import org.netpreserve.warcana.bluesky.BlueskyAccountArchiver;
 import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
@@ -13,6 +14,10 @@ import org.netpreserve.warcana.common.ProgressReporter;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.common.WarcJsonExtractor;
 import org.netpreserve.warcana.common.WarcResponseExtractor;
+import org.netpreserve.warcana.common.search.SearchHit;
+import org.netpreserve.warcana.common.search.SearchOptions;
+import org.netpreserve.warcana.common.search.SearchResults;
+import org.netpreserve.warcana.common.search.WarcSearchIndex;
 import org.netpreserve.warcana.mastodon.MastodonAccountArchiver;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
 import org.netpreserve.warcana.mastodon.MastodonWarcResponseExtractor;
@@ -23,6 +28,9 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -31,6 +39,7 @@ import java.util.Map;
 public class Warcana {
     private static final String ARCHIVE_COMMAND = "archive";
     private static final String EXTRACT_COMMAND = "extract";
+    private static final String SEARCH_COMMAND = "search";
     private static final String DEFAULT_USER_AGENT = "warcana/0.1.0";
     private static final long DEFAULT_MAX_MEDIA_BYTES = 100L * 1024 * 1024;
     private static final long DEFAULT_MAX_TOTAL_MEDIA_BYTES = 1024L * 1024 * 1024;
@@ -68,6 +77,7 @@ public class Warcana {
         return switch (args[0]) {
             case ARCHIVE_COMMAND -> runArchive(args, out, err);
             case EXTRACT_COMMAND -> runExtract(args, out, err);
+            case SEARCH_COMMAND -> runSearch(args, out, err);
             default -> {
                 err.println("Unknown command: " + args[0]);
                 usage(err);
@@ -258,10 +268,7 @@ public class Warcana {
                         "Output already exists: " + output + " (use --force to replace it)");
             }
 
-            List<WarcResponseExtractor> extractors = List.of(
-                    new MastodonWarcResponseExtractor(),
-                    new BlueskyWarcResponseExtractor());
-            var results = new WarcJsonExtractor(extractors).extract(input);
+            var results = new WarcJsonExtractor(responseExtractors()).extract(input);
             byte[] json = pretty
                     ? SocialJson.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(results)
                     : SocialJson.mapper.writeValueAsBytes(results);
@@ -280,6 +287,264 @@ public class Warcana {
         } catch (IOException e) {
             err.println("extraction failed: " + e.getMessage());
             return 1;
+        }
+    }
+
+    private static int runSearch(String[] args, PrintStream out, PrintStream err) {
+        Path input = null;
+        Path index = null;
+        String platform = null;
+        String author = null;
+        Instant since = null;
+        Instant until = null;
+        boolean hasMedia = false;
+        boolean reindex = false;
+        boolean quiet = false;
+        int limit = 20;
+        int offset = 0;
+        SearchFormat format = SearchFormat.TEXT;
+        ColorMode colorMode = ColorMode.AUTO;
+        var queryParts = new ArrayList<String>();
+
+        try {
+            for (int i = 1; i < args.length; i++) {
+                switch (args[i]) {
+                    case "-h", "--help" -> {
+                        searchUsage(out);
+                        return 0;
+                    }
+                    case "--index" -> index = Path.of(requireValue(args, ++i, args[i - 1]));
+                    case "--reindex" -> reindex = true;
+                    case "--platform" -> platform = Platform
+                            .parse(requireValue(args, ++i, args[i - 1]))
+                            .name().toLowerCase(Locale.ROOT);
+                    case "--author" -> author = requireValue(args, ++i, args[i - 1]);
+                    case "--since" ->
+                            since = parseSearchDate(requireValue(args, ++i, args[i - 1]), false);
+                    case "--until" ->
+                            until = parseSearchDate(requireValue(args, ++i, args[i - 1]), true);
+                    case "--has-media" -> hasMedia = true;
+                    case "--limit" ->
+                            limit = Integer.parseInt(requireValue(args, ++i, args[i - 1]));
+                    case "--offset" ->
+                            offset = Integer.parseInt(requireValue(args, ++i, args[i - 1]));
+                    case "--format" ->
+                            format = SearchFormat.parse(requireValue(args, ++i, args[i - 1]));
+                    case "--color" ->
+                            colorMode = ColorMode.parse(requireValue(args, ++i, args[i - 1]));
+                    case "-q", "--quiet" -> quiet = true;
+                    case "--" -> {
+                        for (i++; i < args.length; i++) {
+                            queryParts.add(args[i]);
+                        }
+                    }
+                    default -> {
+                        if (args[i].startsWith("-")) {
+                            throw new IllegalArgumentException("Unknown option: " + args[i]);
+                        }
+                        if (input == null) {
+                            input = Path.of(args[i]);
+                        } else {
+                            queryParts.add(args[i]);
+                        }
+                    }
+                }
+            }
+
+            if (input == null) {
+                throw new IllegalArgumentException("Missing WARC file");
+            }
+            if (!Files.isRegularFile(input)) {
+                throw new IllegalArgumentException("WARC file does not exist: " + input);
+            }
+            String query = String.join(" ", queryParts);
+            if (limit < 1 || limit > 1000) {
+                throw new IllegalArgumentException("--limit must be between 1 and 1000");
+            }
+            if (offset < 0) {
+                throw new IllegalArgumentException("--offset must not be negative");
+            }
+            if (since != null && until != null && since.isAfter(until)) {
+                throw new IllegalArgumentException("--since must not be after --until");
+            }
+            if (index == null) {
+                index = Path.of(input.toString() + ".index");
+            }
+
+            ProgressReporter progress = quiet
+                    ? ProgressReporter.NONE
+                    : err::println;
+            var searchIndex = new WarcSearchIndex(responseExtractors());
+            searchIndex.ensureCurrent(input, index, reindex, progress);
+            SearchResults results = searchIndex.search(
+                    index,
+                    new SearchOptions(
+                            query,
+                            platform,
+                            author,
+                            since,
+                            until,
+                            hasMedia,
+                            limit,
+                            offset));
+            writeSearchResults(
+                    results,
+                    format,
+                    out,
+                    colorMode.enabled(out));
+            return 0;
+        } catch (IllegalArgumentException e) {
+            err.println("error: " + e.getMessage());
+            return 2;
+        } catch (IOException e) {
+            err.println("search failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    private static List<WarcResponseExtractor> responseExtractors() {
+        return List.of(
+                new MastodonWarcResponseExtractor(),
+                new BlueskyWarcResponseExtractor());
+    }
+
+    private static Instant parseSearchDate(String value, boolean endOfDay) {
+        try {
+            if (value.contains("T")) {
+                return Instant.parse(value);
+            }
+            LocalDate date = LocalDate.parse(value);
+            return endOfDay
+                    ? date.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().minusMillis(1)
+                    : date.atStartOfDay(ZoneOffset.UTC).toInstant();
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException(
+                    "Invalid date '" + value + "' (expected YYYY-MM-DD or an ISO-8601 instant)");
+        }
+    }
+
+    private static void writeSearchResults(
+            SearchResults results, SearchFormat format,
+            PrintStream out, boolean color) throws IOException {
+        if (format == SearchFormat.JSON) {
+            out.write(SocialJson.mapper.writerWithDefaultPrettyPrinter()
+                    .writeValueAsBytes(results));
+            out.println();
+            return;
+        }
+        if (format == SearchFormat.JSONL) {
+            for (SearchHit hit : results.hits()) {
+                out.println(SocialJson.mapper.writeValueAsString(hit));
+            }
+            return;
+        }
+
+        String heading = results.totalHits() + " result" +
+                (results.totalHits() == 1 ? "" : "s");
+        out.printf("%s%n", color ? Ansi.BOLD + heading + Ansi.RESET : heading);
+        for (SearchHit hit : results.hits()) {
+            var post = hit.post();
+            String author = post.author() == null
+                    ? ""
+                    : nullToEmpty(post.author().username());
+            out.println();
+            String date = post.createdAt() == null
+                    ? "unknown date"
+                    : post.createdAt().toString();
+            String url = post.url();
+            if (color) {
+                out.printf("%s@%s%s · %s%s%s · %s%s%s",
+                        Ansi.BOLD_CYAN, author, Ansi.RESET,
+                        Ansi.MAGENTA, hit.platform(), Ansi.RESET,
+                        Ansi.DIM, date, Ansi.RESET);
+                if (hit.score() != null) {
+                    out.printf(" · %sscore %.2f%s",
+                            Ansi.YELLOW, hit.score(), Ansi.RESET);
+                }
+                if (url != null) {
+                    out.printf(" · %s%s%s", Ansi.BLUE_UNDERLINE, url, Ansi.RESET);
+                }
+                out.println();
+            } else {
+                out.printf("@%s · %s · %s",
+                        author, hit.platform(), date);
+                if (hit.score() != null) {
+                    out.printf(" · score %.2f", hit.score());
+                }
+                if (url != null) {
+                    out.print(" · " + url);
+                }
+                out.println();
+            }
+            String snippet = color
+                    ? hit.snippet()
+                            .replace("<b>", Ansi.BOLD_YELLOW)
+                            .replace("</b>", Ansi.RESET)
+                    : hit.snippet()
+                            .replace("<b>", "[")
+                            .replace("</b>", "]");
+            out.println(Entities.unescape(snippet));
+        }
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private enum SearchFormat {
+        TEXT,
+        JSON,
+        JSONL;
+
+        static SearchFormat parse(String value) {
+            try {
+                return valueOf(value.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(
+                        "Unknown search format '" + value +
+                                "' (expected text, json or jsonl)");
+            }
+        }
+    }
+
+    private enum ColorMode {
+        AUTO,
+        ALWAYS,
+        NEVER;
+
+        static ColorMode parse(String value) {
+            try {
+                return valueOf(value.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(
+                        "Unknown color mode '" + value +
+                                "' (expected auto, always or never)");
+            }
+        }
+
+        boolean enabled(PrintStream out) {
+            return switch (this) {
+                case ALWAYS -> true;
+                case NEVER -> false;
+                case AUTO -> out == System.out &&
+                        System.console() != null &&
+                        System.getenv("NO_COLOR") == null &&
+                        !"dumb".equalsIgnoreCase(System.getenv("TERM"));
+            };
+        }
+    }
+
+    private static class Ansi {
+        private static final String RESET = "\u001b[0m";
+        private static final String BOLD = "\u001b[1m";
+        private static final String DIM = "\u001b[2m";
+        private static final String YELLOW = "\u001b[33m";
+        private static final String MAGENTA = "\u001b[35m";
+        private static final String BOLD_CYAN = "\u001b[1;36m";
+        private static final String BOLD_YELLOW = "\u001b[1;33m";
+        private static final String BLUE_UNDERLINE = "\u001b[4;34m";
+
+        private Ansi() {
         }
     }
 
@@ -414,6 +679,8 @@ public class Warcana {
                 "Archive a Mastodon or Bluesky account to WARC");
         stream.printf("  %-12s %s%n", EXTRACT_COMMAND,
                 "Extract common-model JSON from a WARC");
+        stream.printf("  %-12s %s%n", SEARCH_COMMAND,
+                "Full-text search posts in a WARC");
         stream.println();
         stream.println("Run 'warcana <command> --help' for command options.");
     }
@@ -455,6 +722,32 @@ public class Warcana {
         stream.println("  -o, --output FILE  Write JSON to FILE instead of stdout");
         stream.println("  --pretty           Pretty-print the JSON");
         stream.println("  -f, --force        Replace an existing output file");
+        stream.println("  -h, --help         Show this help");
+    }
+
+    private static void searchUsage(PrintStream stream) {
+        stream.println("Usage: warcana " + SEARCH_COMMAND +
+                " [options] WARC_FILE [QUERY]");
+        stream.println();
+        stream.println("Full-text searches Mastodon and Bluesky posts.");
+        stream.println("With no query, lists the most recent posts first.");
+        stream.println("The first search builds a reusable WARC_FILE.index sidecar.");
+        stream.println("Terms are ANDed by default; quotes, OR, NOT and field queries");
+        stream.println("(text:, author:, mentions:, alt:, platform:) are supported.");
+        stream.println();
+        stream.println("Options:");
+        stream.println("  --index DIRECTORY  Use a custom index directory");
+        stream.println("  --reindex          Rebuild the search index");
+        stream.println("  --platform NAME    Filter by mastodon or bluesky");
+        stream.println("  --author HANDLE    Filter by exact author handle");
+        stream.println("  --since DATE       Include posts on or after DATE");
+        stream.println("  --until DATE       Include posts on or before DATE");
+        stream.println("  --has-media        Only include posts with attachments");
+        stream.println("  --limit NUMBER     Maximum results (default: 20)");
+        stream.println("  --offset NUMBER    Skip the first NUMBER results");
+        stream.println("  --format FORMAT    text, json or jsonl (default: text)");
+        stream.println("  --color WHEN       auto, always or never (default: auto)");
+        stream.println("  -q, --quiet        Suppress index progress output");
         stream.println("  -h, --help         Show this help");
     }
 }
