@@ -50,7 +50,8 @@ class WarcanaTest {
         var stderr = new ByteArrayOutputStream();
 
         int result = Warcana.run(new String[]{
-                        "archive-mastodon-account",
+                        "archive",
+                        "--platform", "mastodon",
                         "--output", output.toString(),
                         "@alice@example.social"
                 },
@@ -60,6 +61,22 @@ class WarcanaTest {
         assertEquals(2, result);
         assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("use --force"));
         Files.delete(output);
+    }
+
+    @Test
+    void genericArchiveRequiresPlatformForAmbiguousHandles() {
+        var stdout = new ByteArrayOutputStream();
+        var stderr = new ByteArrayOutputStream();
+
+        int result = Warcana.run(new String[]{
+                        "archive",
+                        "@alice.example"
+                },
+                new PrintStream(stdout),
+                new PrintStream(stderr));
+
+        assertEquals(2, result);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("--platform"));
     }
 
     @Test
@@ -121,7 +138,7 @@ class WarcanaTest {
         var stdout = new ByteArrayOutputStream();
         var stderr = new ByteArrayOutputStream();
         int result = Warcana.run(new String[]{
-                        "extract-mastodon-json",
+                        "extract",
                         "--pretty",
                         "--output", jsonOutput.toString(),
                         warc.toString()
@@ -162,7 +179,7 @@ class WarcanaTest {
         var stdout = new ByteArrayOutputStream();
         var stderr = new ByteArrayOutputStream();
         int result = Warcana.run(new String[]{
-                        "extract-bluesky-json",
+                        "extract",
                         "--pretty",
                         "--output", jsonOutput.toString(),
                         warc.toString()
@@ -180,6 +197,52 @@ class WarcanaTest {
         assertEquals("Bluesky", post.get("site").get("name").asText());
         assertEquals("Example post", post.get("content").asText());
         assertEquals("image", post.get("attachments").get(0).get("type").asText());
+
+        Files.delete(warc);
+        Files.delete(jsonOutput);
+    }
+
+    @Test
+    void genericExtractReadsMixedPlatformWarcInOnePass() throws Exception {
+        var warc = Files.createTempFile("warcana-mixed-input-", ".warc");
+        var jsonOutput = Files.createTempFile("warcana-mixed-output-", ".json");
+        Files.delete(jsonOutput);
+
+        try (var writer = new WarcWriter(warc)) {
+            var mastodonHttp = new HttpResponse.Builder(200, "OK")
+                    .body(MediaType.JSON,
+                            ("[" + mastodonStatusJson() + "]").getBytes(StandardCharsets.UTF_8))
+                    .build();
+            writer.write(new WarcResponse.Builder(
+                    "https://example.social/api/v1/accounts/42/statuses?limit=40")
+                    .body(mastodonHttp)
+                    .build());
+
+            var blueskyHttp = new HttpResponse.Builder(200, "OK")
+                    .body(MediaType.JSON, blueskyFeedJson().getBytes(StandardCharsets.UTF_8))
+                    .build();
+            writer.write(new WarcResponse.Builder(
+                    "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed" +
+                            "?actor=did%3Aplc%3Aexample&limit=100")
+                    .body(blueskyHttp)
+                    .build());
+        }
+
+        var stdout = new ByteArrayOutputStream();
+        var stderr = new ByteArrayOutputStream();
+        int result = Warcana.run(new String[]{
+                        "extract",
+                        "--output", jsonOutput.toString(),
+                        warc.toString()
+                },
+                new PrintStream(stdout),
+                new PrintStream(stderr));
+
+        assertEquals(0, result, stderr.toString(StandardCharsets.UTF_8));
+        var json = SocialJson.mapper.readTree(jsonOutput);
+        assertEquals(2, json.get("totalHits").asInt());
+        assertEquals("example.social", json.get("posts").get(0).get("site").get("name").asText());
+        assertEquals("Bluesky", json.get("posts").get(1).get("site").get("name").asText());
 
         Files.delete(warc);
         Files.delete(jsonOutput);

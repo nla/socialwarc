@@ -5,26 +5,42 @@ import org.netpreserve.jwarc.Warcinfo;
 import org.netpreserve.warcana.bluesky.AtProtocolClient;
 import org.netpreserve.warcana.bluesky.BlueskyAccountArchiver;
 import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
-import org.netpreserve.warcana.bluesky.BlueskyWarcJsonExtractor;
+import org.netpreserve.warcana.bluesky.BlueskyWarcResponseExtractor;
 import org.netpreserve.warcana.common.SocialJson;
+import org.netpreserve.warcana.common.WarcJsonExtractor;
+import org.netpreserve.warcana.common.WarcResponseExtractor;
 import org.netpreserve.warcana.mastodon.MastodonAccountArchiver;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
-import org.netpreserve.warcana.mastodon.MastodonWarcJsonExtractor;
+import org.netpreserve.warcana.mastodon.MastodonWarcResponseExtractor;
 
 import java.io.IOException;
 import java.io.PrintStream;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public class Warcana {
-    private static final String ARCHIVE_COMMAND = "archive-mastodon-account";
-    private static final String BLUESKY_ARCHIVE_COMMAND = "archive-bluesky-account";
-    private static final String EXTRACT_COMMAND = "extract-mastodon-json";
-    private static final String BLUESKY_EXTRACT_COMMAND = "extract-bluesky-json";
+    private static final String ARCHIVE_COMMAND = "archive";
+    private static final String EXTRACT_COMMAND = "extract";
     private static final String DEFAULT_USER_AGENT = "warcana/0.1.0";
+
+    private enum Platform {
+        MASTODON,
+        BLUESKY;
+
+        static Platform parse(String value) {
+            try {
+                return valueOf(value.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(
+                        "Unknown platform '" + value + "' (expected mastodon or bluesky)");
+            }
+        }
+    }
 
     public static void main(String[] args) {
         int status = run(args, System.out, System.err);
@@ -42,25 +58,24 @@ public class Warcana {
             usage(out);
             return 0;
         }
-        if (EXTRACT_COMMAND.equals(args[0])) {
-            return runExtract(args, out, err, false);
-        }
-        if (BLUESKY_EXTRACT_COMMAND.equals(args[0])) {
-            return runExtract(args, out, err, true);
-        }
-        if (BLUESKY_ARCHIVE_COMMAND.equals(args[0])) {
-            return runArchiveBluesky(args, out, err);
-        }
-        if (!ARCHIVE_COMMAND.equals(args[0])) {
-            err.println("Unknown command: " + args[0]);
-            usage(err);
-            return 2;
-        }
+        return switch (args[0]) {
+            case ARCHIVE_COMMAND -> runArchive(args, out, err);
+            case EXTRACT_COMMAND -> runExtract(args, out, err);
+            default -> {
+                err.println("Unknown command: " + args[0]);
+                usage(err);
+                yield 2;
+            }
+        };
+    }
 
+    private static int runArchive(String[] args, PrintStream out, PrintStream err) {
         Path output = null;
         String userAgent = DEFAULT_USER_AGENT;
+        String service = null;
         String accountArgument = null;
-        int pageSize = 40;
+        Integer pageSize = null;
+        Platform requestedPlatform = null;
         boolean force = false;
 
         try {
@@ -70,65 +85,8 @@ public class Warcana {
                         archiveUsage(out);
                         return 0;
                     }
-                    case "-o", "--output" -> output = Path.of(requireValue(args, ++i, args[i - 1]));
-                    case "-A", "--user-agent" -> userAgent = requireValue(args, ++i, args[i - 1]);
-                    case "--page-size" ->
-                            pageSize = Integer.parseInt(requireValue(args, ++i, args[i - 1]));
-                    case "-f", "--force" -> force = true;
-                    default -> {
-                        if (args[i].startsWith("-") && !args[i].startsWith("@")) {
-                            throw new IllegalArgumentException("Unknown option: " + args[i]);
-                        }
-                        if (accountArgument != null) {
-                            throw new IllegalArgumentException("Only one account may be archived at a time");
-                        }
-                        accountArgument = args[i];
-                    }
-                }
-            }
-
-            if (accountArgument == null) {
-                throw new IllegalArgumentException("Missing Mastodon account");
-            }
-            MastodonAccountReference reference = MastodonAccountReference.parse(accountArgument);
-            if (output == null) {
-                output = Path.of(reference.defaultFilename());
-            }
-            if (Files.exists(output) && !force) {
-                throw new IllegalArgumentException(
-                        "Output already exists: " + output + " (use --force to replace it)");
-            }
-
-            var result = archive(reference, output, userAgent, pageSize);
-            out.printf("Archived %d statuses from %s to %s%n",
-                    result.statusesArchived(),
-                    result.account().acct(),
-                    output.toAbsolutePath());
-            return 0;
-        } catch (IllegalArgumentException e) {
-            err.println("error: " + e.getMessage());
-            return 2;
-        } catch (IOException e) {
-            err.println("archive failed: " + e.getMessage());
-            return 1;
-        }
-    }
-
-    private static int runArchiveBluesky(String[] args, PrintStream out, PrintStream err) {
-        Path output = null;
-        String userAgent = DEFAULT_USER_AGENT;
-        String service = AtProtocolClient.PUBLIC_APPVIEW;
-        String accountArgument = null;
-        int pageSize = 100;
-        boolean force = false;
-
-        try {
-            for (int i = 1; i < args.length; i++) {
-                switch (args[i]) {
-                    case "-h", "--help" -> {
-                        blueskyArchiveUsage(out);
-                        return 0;
-                    }
+                    case "-p", "--platform" ->
+                            requestedPlatform = Platform.parse(requireValue(args, ++i, args[i - 1]));
                     case "-o", "--output" -> output = Path.of(requireValue(args, ++i, args[i - 1]));
                     case "-A", "--user-agent" -> userAgent = requireValue(args, ++i, args[i - 1]);
                     case "--service" -> service = requireValue(args, ++i, args[i - 1]);
@@ -140,7 +98,8 @@ public class Warcana {
                             throw new IllegalArgumentException("Unknown option: " + args[i]);
                         }
                         if (accountArgument != null) {
-                            throw new IllegalArgumentException("Only one account may be archived at a time");
+                            throw new IllegalArgumentException(
+                                    "Only one account may be archived at a time");
                         }
                         accountArgument = args[i];
                     }
@@ -148,22 +107,34 @@ public class Warcana {
             }
 
             if (accountArgument == null) {
-                throw new IllegalArgumentException("Missing Bluesky account");
+                throw new IllegalArgumentException("Missing account");
             }
-            BlueskyAccountReference reference = BlueskyAccountReference.parse(accountArgument);
-            if (output == null) {
-                output = Path.of(reference.defaultFilename());
-            }
-            if (Files.exists(output) && !force) {
-                throw new IllegalArgumentException(
-                        "Output already exists: " + output + " (use --force to replace it)");
-            }
+            Platform platform = requestedPlatform != null
+                    ? requestedPlatform
+                    : detectPlatform(accountArgument);
 
-            var result = archiveBluesky(reference, output, service, userAgent, pageSize);
-            out.printf("Archived %d feed items from %s to %s%n",
-                    result.feedItemsArchived(),
-                    result.profile().handle(),
-                    output.toAbsolutePath());
+            if (platform == Platform.MASTODON) {
+                if (service != null) {
+                    throw new IllegalArgumentException("--service is only valid for Bluesky");
+                }
+                int effectivePageSize = pageSize == null ? 40 : pageSize;
+                MastodonAccountReference reference = MastodonAccountReference.parse(accountArgument);
+                output = chooseOutput(output, reference.defaultFilename(), force);
+                var result = archiveMastodon(reference, output, userAgent, effectivePageSize);
+                out.printf("Archived %d statuses from %s to %s%n",
+                        result.statusesArchived(), result.account().acct(), output.toAbsolutePath());
+            } else {
+                int effectivePageSize = pageSize == null ? 100 : pageSize;
+                String effectiveService = service == null
+                        ? AtProtocolClient.PUBLIC_APPVIEW
+                        : service;
+                BlueskyAccountReference reference = BlueskyAccountReference.parse(accountArgument);
+                output = chooseOutput(output, reference.defaultFilename(), force);
+                var result = archiveBluesky(
+                        reference, output, effectiveService, userAgent, effectivePageSize);
+                out.printf("Archived %d feed items from %s to %s%n",
+                        result.feedItemsArchived(), result.profile().handle(), output.toAbsolutePath());
+            }
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("error: " + e.getMessage());
@@ -174,8 +145,39 @@ public class Warcana {
         }
     }
 
-    private static int runExtract(String[] args, PrintStream out, PrintStream err,
-                                  boolean bluesky) {
+    private static Platform detectPlatform(String account) {
+        if (account.startsWith("http://") || account.startsWith("https://")) {
+            URI uri = URI.create(account);
+            if (uri.getHost() != null &&
+                    (uri.getHost().equalsIgnoreCase("bsky.app") ||
+                            uri.getHost().equalsIgnoreCase("www.bsky.app")) &&
+                    uri.getPath().startsWith("/profile/")) {
+                return Platform.BLUESKY;
+            }
+            return Platform.MASTODON;
+        }
+        if (account.startsWith("did:")) {
+            return Platform.BLUESKY;
+        }
+        String withoutLeadingAt = account.replaceFirst("^@", "");
+        if (withoutLeadingAt.contains("@")) {
+            return Platform.MASTODON;
+        }
+        throw new IllegalArgumentException(
+                "Cannot determine platform from account handle; use --platform mastodon or --platform bluesky");
+    }
+
+    private static Path chooseOutput(Path requested, String defaultFilename,
+                                     boolean force) {
+        Path output = requested == null ? Path.of(defaultFilename) : requested;
+        if (Files.exists(output) && !force) {
+            throw new IllegalArgumentException(
+                    "Output already exists: " + output + " (use --force to replace it)");
+        }
+        return output;
+    }
+
+    private static int runExtract(String[] args, PrintStream out, PrintStream err) {
         Path input = null;
         Path output = null;
         boolean force = false;
@@ -185,7 +187,7 @@ public class Warcana {
             for (int i = 1; i < args.length; i++) {
                 switch (args[i]) {
                     case "-h", "--help" -> {
-                        extractUsage(out, bluesky);
+                        extractUsage(out);
                         return 0;
                     }
                     case "-o", "--output" -> output = Path.of(requireValue(args, ++i, args[i - 1]));
@@ -196,7 +198,8 @@ public class Warcana {
                             throw new IllegalArgumentException("Unknown option: " + args[i]);
                         }
                         if (input != null) {
-                            throw new IllegalArgumentException("Only one WARC file may be read at a time");
+                            throw new IllegalArgumentException(
+                                    "Only one WARC file may be read at a time");
                         }
                         input = Path.of(args[i]);
                     }
@@ -214,9 +217,10 @@ public class Warcana {
                         "Output already exists: " + output + " (use --force to replace it)");
             }
 
-            var results = bluesky
-                    ? new BlueskyWarcJsonExtractor().extract(input)
-                    : new MastodonWarcJsonExtractor().extract(input);
+            List<WarcResponseExtractor> extractors = List.of(
+                    new MastodonWarcResponseExtractor(),
+                    new BlueskyWarcResponseExtractor());
+            var results = new WarcJsonExtractor(extractors).extract(input);
             byte[] json = pretty
                     ? SocialJson.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(results)
                     : SocialJson.mapper.writeValueAsBytes(results);
@@ -225,7 +229,8 @@ public class Warcana {
                 out.println();
             } else {
                 Files.write(output, json);
-                out.printf("Extracted %d posts to %s%n", results.totalHits(), output.toAbsolutePath());
+                out.printf("Extracted %d posts to %s%n",
+                        results.totalHits(), output.toAbsolutePath());
             }
             return 0;
         } catch (IllegalArgumentException e) {
@@ -237,14 +242,15 @@ public class Warcana {
         }
     }
 
-    private static MastodonAccountArchiver.ArchiveResult archive(
+    private static MastodonAccountArchiver.ArchiveResult archiveMastodon(
             MastodonAccountReference reference, Path output,
             String userAgent, int pageSize) throws IOException {
         String accountAddress = reference.account() + "@" +
-                java.net.URI.create(reference.server()).getRawAuthority();
+                URI.create(reference.server()).getRawAuthority();
         Map<String, List<String>> metadata = Map.of(
                 "software", List.of(userAgent),
                 "format", List.of("WARC File Format 1.1"),
+                "platform", List.of("mastodon"),
                 "account", List.of(accountAddress),
                 "created", List.of(Instant.now().toString()));
 
@@ -253,9 +259,9 @@ public class Warcana {
                     .filename(output.getFileName().toString())
                     .fields(metadata)
                     .build());
-            var archiver = new MastodonAccountArchiver(
-                    reference.server(), userAgent, warcWriter, pageSize);
-            return archiver.archive(reference.account());
+            return new MastodonAccountArchiver(
+                    reference.server(), userAgent, warcWriter, pageSize)
+                    .archive(reference.account());
         }
     }
 
@@ -265,6 +271,7 @@ public class Warcana {
         Map<String, List<String>> metadata = Map.of(
                 "software", List.of(userAgent),
                 "format", List.of("WARC File Format 1.1"),
+                "platform", List.of("bluesky"),
                 "account", List.of(reference.actor()),
                 "api", List.of(service),
                 "created", List.of(Instant.now().toString()));
@@ -274,9 +281,9 @@ public class Warcana {
                     .filename(output.getFileName().toString())
                     .fields(metadata)
                     .build());
-            var archiver = new BlueskyAccountArchiver(
-                    service, userAgent, warcWriter, pageSize);
-            return archiver.archive(reference.actor());
+            return new BlueskyAccountArchiver(
+                    service, userAgent, warcWriter, pageSize)
+                    .archive(reference.actor());
         }
     }
 
@@ -291,13 +298,10 @@ public class Warcana {
         stream.println("Usage: warcana <command> [options]");
         stream.println();
         stream.println("Commands:");
-        stream.printf("  %-28s %s%n", ARCHIVE_COMMAND, "Archive a Mastodon account to WARC");
-        stream.printf("  %-28s %s%n", BLUESKY_ARCHIVE_COMMAND,
-                "Archive a Bluesky account to WARC");
-        stream.printf("  %-28s %s%n", EXTRACT_COMMAND,
-                "Extract common-model JSON from a Mastodon WARC");
-        stream.printf("  %-28s %s%n", BLUESKY_EXTRACT_COMMAND,
-                "Extract common-model JSON from a Bluesky WARC");
+        stream.printf("  %-12s %s%n", ARCHIVE_COMMAND,
+                "Archive a Mastodon or Bluesky account to WARC");
+        stream.printf("  %-12s %s%n", EXTRACT_COMMAND,
+                "Extract common-model JSON from a WARC");
         stream.println();
         stream.println("Run 'warcana <command> --help' for command options.");
     }
@@ -305,23 +309,25 @@ public class Warcana {
     private static void archiveUsage(PrintStream stream) {
         stream.println("Usage: warcana " + ARCHIVE_COMMAND + " [options] ACCOUNT");
         stream.println();
-        stream.println("ACCOUNT may be @user@server or https://server/@user.");
+        stream.println("Archives a Mastodon or Bluesky account.");
+        stream.println("Use --platform when an account handle is ambiguous.");
         stream.println();
         stream.println("Options:");
-        stream.println("  -o, --output FILE       Output path (default: user@server.warc)");
-        stream.println("  -A, --user-agent VALUE  HTTP User-Agent (default: " + DEFAULT_USER_AGENT + ")");
-        stream.println("  --page-size NUMBER      Statuses per API request, 1-40 (default: 40)");
-        stream.println("  -f, --force             Replace an existing output file");
-        stream.println("  -h, --help              Show this help");
+        stream.println("  -p, --platform NAME    mastodon or bluesky");
+        stream.println("  -o, --output FILE      Output path");
+        stream.println("  -A, --user-agent TEXT  HTTP User-Agent (default: " +
+                DEFAULT_USER_AGENT + ")");
+        stream.println("  --page-size NUMBER     Items per API request");
+        stream.println("  --service URL          Bluesky AT Protocol AppView");
+        stream.println("  -f, --force            Replace an existing output file");
+        stream.println("  -h, --help             Show this help");
     }
 
-    private static void extractUsage(PrintStream stream, boolean bluesky) {
-        String command = bluesky ? BLUESKY_EXTRACT_COMMAND : EXTRACT_COMMAND;
-        String service = bluesky ? "Bluesky" : "Mastodon";
-        stream.println("Usage: warcana " + command + " [options] WARC_FILE");
+    private static void extractUsage(PrintStream stream) {
+        stream.println("Usage: warcana " + EXTRACT_COMMAND + " [options] WARC_FILE");
         stream.println();
-        stream.println("Extracts " + service +
-                " account posts as common-model SocialResults JSON.");
+        stream.println("Extracts Mastodon and Bluesky" +
+                " posts as common-model SocialResults JSON.");
         stream.println("Writes JSON to stdout unless --output is specified.");
         stream.println();
         stream.println("Options:");
@@ -329,20 +335,5 @@ public class Warcana {
         stream.println("  --pretty           Pretty-print the JSON");
         stream.println("  -f, --force        Replace an existing output file");
         stream.println("  -h, --help         Show this help");
-    }
-
-    private static void blueskyArchiveUsage(PrintStream stream) {
-        stream.println("Usage: warcana " + BLUESKY_ARCHIVE_COMMAND + " [options] ACCOUNT");
-        stream.println();
-        stream.println("ACCOUNT may be @user.bsky.social or https://bsky.app/profile/user.bsky.social.");
-        stream.println();
-        stream.println("Options:");
-        stream.println("  -o, --output FILE       Output path (default: handle.warc)");
-        stream.println("  -A, --user-agent VALUE  HTTP User-Agent (default: " + DEFAULT_USER_AGENT + ")");
-        stream.println("  --service URL           AT Protocol AppView (default: " +
-                AtProtocolClient.PUBLIC_APPVIEW + ")");
-        stream.println("  --page-size NUMBER      Feed items per API request, 1-100 (default: 100)");
-        stream.println("  -f, --force             Replace an existing output file");
-        stream.println("  -h, --help              Show this help");
     }
 }
