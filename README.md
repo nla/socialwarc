@@ -101,6 +101,26 @@ java -jar target/warcana-0.1.0.jar search collection "climate archive"
 
 The index is rebuilt automatically whenever the completed WARC set changes.
 
+Inspect a collection:
+
+```sh
+java -jar target/warcana-0.1.0.jar inspect collection
+```
+
+This reports configured and tracked accounts, completed posts/media/video
+WARCs, open streams, active resumable jobs, total sizes, and search-index
+state. Use `--format json` for machine-readable output.
+
+Individual completed or open WARC files can be inspected in the same way:
+
+```sh
+java -jar target/warcana-0.1.0.jar inspect \
+  collection/warcs/warcana-posts-example.warc
+```
+
+WARC inspection reports record types, HTTP statuses, record dates, extracted
+posts by platform, block-digest mismatches, and parser warnings.
+
 ## Single-account capture
 
 Single-file capture remains available and now writes through a temporary file

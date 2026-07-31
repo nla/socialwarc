@@ -11,6 +11,7 @@ import org.netpreserve.warcana.bluesky.model.PostView;
 import org.netpreserve.warcana.bluesky.model.Embed;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.common.collection.CollectionStore;
+import org.netpreserve.warcana.common.collection.CollectionJob;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
 import org.netpreserve.warcana.mastodon.model.Status;
 
@@ -576,6 +577,114 @@ class WarcanaTest {
                     SocialJson.mapper.readTree(stdout.toByteArray())
                             .get("totalHits").asInt());
             assertTrue(Files.isDirectory(store.indexDirectory()));
+        } finally {
+            try (var paths = Files.walk(root)) {
+                for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.delete(path);
+                }
+            }
+        }
+    }
+
+    @Test
+    void inspectsAnIndividualWarcAsTextAndJson() throws Exception {
+        var temporary = Files.createTempDirectory("warcana-inspect-warc-");
+        try {
+            var warc = temporary.resolve("posts.warc");
+            try (var writer = new WarcWriter(warc)) {
+                var http = new HttpResponse.Builder(200, "OK")
+                        .body(
+                                MediaType.JSON,
+                                ("[" + mastodonStatusJson() + "]")
+                                        .getBytes(StandardCharsets.UTF_8))
+                        .build();
+                writer.write(new WarcResponse.Builder(
+                        "https://example.social/api/v1/accounts/42/statuses?limit=40")
+                        .body(http)
+                        .build());
+            }
+
+            var stdout = new ByteArrayOutputStream();
+            var stderr = new ByteArrayOutputStream();
+            int textResult = Warcana.run(new String[]{
+                            "inspect", warc.toString()
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+            assertEquals(0, textResult, stderr.toString(StandardCharsets.UTF_8));
+            assertTrue(stdout.toString(StandardCharsets.UTF_8)
+                    .contains("Records: 1"));
+            assertTrue(stdout.toString(StandardCharsets.UTF_8)
+                    .contains("Posts: 1"));
+
+            stdout.reset();
+            stderr.reset();
+            int jsonResult = Warcana.run(new String[]{
+                            "inspect", "--format", "json", warc.toString()
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+            assertEquals(0, jsonResult, stderr.toString(StandardCharsets.UTF_8));
+            var json = SocialJson.mapper.readTree(stdout.toByteArray());
+            assertEquals("warc", json.get("kind").asText());
+            assertEquals(1, json.get("records").asLong());
+            assertEquals(1, json.get("recordTypes").get("response").asLong());
+            assertEquals(1, json.get("posts").asLong());
+            assertEquals(1,
+                    json.get("postsByPlatform").get("mastodon").asLong());
+        } finally {
+            try (var paths = Files.walk(temporary)) {
+                for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.delete(path);
+                }
+            }
+        }
+    }
+
+    @Test
+    void inspectsACollectionIncludingOpenWarcsAndJobs() throws Exception {
+        var root = Files.createTempDirectory("warcana-inspect-collection-");
+        try {
+            var store = new CollectionStore(root);
+            store.initialize();
+            Files.write(
+                    store.warcsDirectory().resolve(
+                            "warcana-posts-example.warc"),
+                    new byte[]{1, 2, 3});
+            var state = store.loadCollectionState();
+            state.mediaOpenWarc =
+                    "warcs/warcana-media-example.warc.open";
+            state.mediaFinalWarc =
+                    "warcs/warcana-media-example.warc";
+            Files.write(
+                    root.resolve(state.mediaOpenWarc),
+                    new byte[]{4, 5});
+            store.saveCollectionState(state);
+            var job = new CollectionJob();
+            job.key = "inspect-job";
+            job.account = "@alice@example.social";
+            store.saveJob(job);
+
+            var stdout = new ByteArrayOutputStream();
+            var stderr = new ByteArrayOutputStream();
+            int result = Warcana.run(new String[]{
+                            "inspect", "--format", "json", root.toString()
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+
+            assertEquals(0, result, stderr.toString(StandardCharsets.UTF_8));
+            var json = SocialJson.mapper.readTree(stdout.toByteArray());
+            assertEquals("collection", json.get("kind").asText());
+            assertEquals(1, json.get("activeJobs").asInt());
+            assertEquals(3, json.get("completedBytes").asLong());
+            assertEquals(1,
+                    json.get("completedByKind").get("posts")
+                            .get("files").asLong());
+            assertEquals("open", json.get("warcs").get(1)
+                    .get("state").asText());
+            assertEquals("media", json.get("warcs").get(1)
+                    .get("kind").asText());
         } finally {
             try (var paths = Files.walk(root)) {
                 for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {

@@ -156,6 +156,19 @@ public class CollectionStore {
         Files.deleteIfExists(jobFile(key));
     }
 
+    public List<Path> activeJobFiles() throws IOException {
+        if (!Files.isDirectory(jobsDirectory())) {
+            return List.of();
+        }
+        try (var stream = Files.list(jobsDirectory())) {
+            return stream
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".json"))
+                    .sorted()
+                    .toList();
+        }
+    }
+
     public List<Path> completedWarcs() throws IOException {
         if (!Files.isDirectory(warcsDirectory())) {
             return List.of();
