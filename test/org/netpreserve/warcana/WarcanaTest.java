@@ -7,6 +7,7 @@ import org.netpreserve.jwarc.WarcResponse;
 import org.netpreserve.jwarc.WarcWriter;
 import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
 import org.netpreserve.warcana.bluesky.model.PostView;
+import org.netpreserve.warcana.bluesky.model.Embed;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
 import org.netpreserve.warcana.mastodon.model.Status;
@@ -139,13 +140,13 @@ class WarcanaTest {
 
     @Test
     void excludesBlueskyVideoButRetainsItsThumbnail() throws Exception {
-        var embed = SocialJson.mapper.readTree("""
+        var embed = SocialJson.mapper.readValue("""
                 {
                   "$type": "app.bsky.embed.video#view",
                   "playlist": "https://video.example/master.m3u8",
                   "thumbnail": "https://video.example/thumbnail.jpg"
                 }
-                """);
+                """, Embed.class);
         var post = new PostView(
                 "", "", null, null, embed,
                 0, 0, 0, 0, null);

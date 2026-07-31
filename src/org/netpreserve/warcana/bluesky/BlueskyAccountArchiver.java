@@ -21,47 +21,32 @@ public class BlueskyAccountArchiver {
     private final ProgressReporter progress;
     private final boolean includeVideo;
 
-    public BlueskyAccountArchiver(String service, String userAgent,
-                                  WarcWriter warcWriter, int pageSize) {
-        this(service, userAgent, warcWriter, pageSize, null);
-    }
-
-    public BlueskyAccountArchiver(String service, String userAgent,
-                                  WarcWriter warcWriter, int pageSize,
-                                  MediaSink mediaSink) {
-        this(service, userAgent, warcWriter, pageSize, mediaSink, ProgressReporter.NONE);
-    }
-
-    public BlueskyAccountArchiver(String service, String userAgent,
-                                  WarcWriter warcWriter, int pageSize,
-                                  MediaSink mediaSink, ProgressReporter progress) {
-        this(service, userAgent, warcWriter, pageSize,
-                mediaSink, progress, true);
-    }
-
-    public BlueskyAccountArchiver(String service, String userAgent,
-                                  WarcWriter warcWriter, int pageSize,
-                                  MediaSink mediaSink, ProgressReporter progress,
-                                  boolean includeVideo) {
+    public BlueskyAccountArchiver(
+            String service,
+            String userAgent,
+            WarcWriter warcWriter,
+            int pageSize,
+            MediaSink mediaSink,
+            ProgressReporter progress,
+            boolean includeVideo) {
         this(new AtProtocolClient(service, userAgent, warcWriter),
                 pageSize, mediaSink, progress, includeVideo);
     }
 
-    BlueskyAccountArchiver(BlueskyApi api, int pageSize) {
-        this(api, pageSize, null);
-    }
-
-    BlueskyAccountArchiver(BlueskyApi api, int pageSize, MediaSink mediaSink) {
-        this(api, pageSize, mediaSink, ProgressReporter.NONE);
-    }
-
-    BlueskyAccountArchiver(BlueskyApi api, int pageSize, MediaSink mediaSink,
-                           ProgressReporter progress) {
+    BlueskyAccountArchiver(
+            BlueskyApi api,
+            int pageSize,
+            MediaSink mediaSink,
+            ProgressReporter progress) {
         this(api, pageSize, mediaSink, progress, true);
     }
 
-    BlueskyAccountArchiver(BlueskyApi api, int pageSize, MediaSink mediaSink,
-                           ProgressReporter progress, boolean includeVideo) {
+    private BlueskyAccountArchiver(
+            BlueskyApi api,
+            int pageSize,
+            MediaSink mediaSink,
+            ProgressReporter progress,
+            boolean includeVideo) {
         if (pageSize < 1 || pageSize > 100) {
             throw new IllegalArgumentException("Page size must be between 1 and 100");
         }

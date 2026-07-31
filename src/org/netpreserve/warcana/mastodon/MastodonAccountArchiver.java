@@ -20,24 +20,14 @@ public class MastodonAccountArchiver {
     private final ProgressReporter progress;
     private final boolean includeVideo;
 
-    public MastodonAccountArchiver(String server, String userAgent, WarcWriter warcWriter, int pageSize) {
-        this(server, userAgent, warcWriter, pageSize, null);
-    }
-
-    public MastodonAccountArchiver(String server, String userAgent, WarcWriter warcWriter,
-                                   int pageSize, MediaSink mediaSink) {
-        this(server, userAgent, warcWriter, pageSize, mediaSink, ProgressReporter.NONE);
-    }
-
-    public MastodonAccountArchiver(String server, String userAgent, WarcWriter warcWriter,
-                                   int pageSize, MediaSink mediaSink,
-                                   ProgressReporter progress) {
-        this(server, userAgent, warcWriter, pageSize, mediaSink, progress, true);
-    }
-
-    public MastodonAccountArchiver(String server, String userAgent, WarcWriter warcWriter,
-                                   int pageSize, MediaSink mediaSink,
-                                   ProgressReporter progress, boolean includeVideo) {
+    public MastodonAccountArchiver(
+            String server,
+            String userAgent,
+            WarcWriter warcWriter,
+            int pageSize,
+            MediaSink mediaSink,
+            ProgressReporter progress,
+            boolean includeVideo) {
         if (pageSize < 1 || pageSize > 40) {
             throw new IllegalArgumentException("Page size must be between 1 and 40");
         }
