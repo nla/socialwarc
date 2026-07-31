@@ -123,6 +123,17 @@ public record Status(
         return List.copyOf(urls);
     }
 
+    public List<String> videoUrls() {
+        var urls = new LinkedHashSet<String>();
+        for (MediaAttachment attachment : mediaAttachments) {
+            urls.addAll(attachment.videoUrls());
+        }
+        if (reblog != null) {
+            urls.addAll(reblog.videoUrls());
+        }
+        return List.copyOf(urls);
+    }
+
     private static void addUrl(LinkedHashSet<String> urls, String value) {
         if (value != null && !value.isBlank()) {
             urls.add(value);

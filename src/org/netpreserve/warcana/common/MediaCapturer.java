@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.nio.channels.Channels;
@@ -26,6 +27,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.function.Consumer;
 
 /**
  * Captures discovered media URLs into a WARC with deduplication and byte limits.
@@ -46,6 +48,7 @@ public class MediaCapturer implements MediaSink {
     private final long maxTotalBytes;
     private final ProgressReporter progress;
     private final boolean allVideoVariants;
+    private final Consumer<String> resourceCompleted;
     private final Set<URI> seen = new HashSet<>();
     private int captured;
     private int failed;
@@ -67,6 +70,29 @@ public class MediaCapturer implements MediaSink {
     public MediaCapturer(WarcWriter writer, String userAgent,
                          long maxResourceBytes, long maxTotalBytes,
                          boolean allVideoVariants, ProgressReporter progress) {
+        this(writer, userAgent, maxResourceBytes, maxTotalBytes,
+                allVideoVariants, progress,
+                new MediaCaptureStats(0, 0, 0, 0), List.of(), ignored -> {
+                });
+    }
+
+    public MediaCapturer(WarcWriter writer, String userAgent,
+                         long maxResourceBytes, long maxTotalBytes,
+                         boolean allVideoVariants, ProgressReporter progress,
+                         MediaCaptureStats initialStats,
+                         Collection<String> previouslySeen) {
+        this(writer, userAgent, maxResourceBytes, maxTotalBytes,
+                allVideoVariants, progress, initialStats, previouslySeen,
+                ignored -> {
+                });
+    }
+
+    public MediaCapturer(WarcWriter writer, String userAgent,
+                         long maxResourceBytes, long maxTotalBytes,
+                         boolean allVideoVariants, ProgressReporter progress,
+                         MediaCaptureStats initialStats,
+                         Collection<String> previouslySeen,
+                         Consumer<String> resourceCompleted) {
         if (maxResourceBytes < 1 || maxTotalBytes < 1) {
             throw new IllegalArgumentException("Media byte limits must be positive");
         }
@@ -76,13 +102,38 @@ public class MediaCapturer implements MediaSink {
         this.maxTotalBytes = maxTotalBytes;
         this.allVideoVariants = allVideoVariants;
         this.progress = progress;
+        this.resourceCompleted = resourceCompleted;
+        this.captured = initialStats.captured();
+        this.failed = initialStats.failed();
+        this.skipped = initialStats.skipped();
+        this.bytes = initialStats.bytes();
+        for (String value : previouslySeen) {
+            try {
+                URI uri = URI.create(value).normalize();
+                if (isSafeHttpUri(uri)) {
+                    seen.add(uri);
+                }
+            } catch (IllegalArgumentException | IOException ignored) {
+                // Ignore invalid persisted values; they will remain skipped.
+            }
+        }
     }
 
     @Override
     public void captureAll(Collection<String> urls) {
         for (String url : urls) {
-            capture(url);
+            captureOne(url);
         }
+    }
+
+    public void captureOne(String value) {
+        capture(value);
+    }
+
+    public Set<String> seenUrls() {
+        return seen.stream()
+                .map(URI::toString)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     private void capture(String value) {
@@ -178,6 +229,8 @@ public class MediaCapturer implements MediaSink {
             if (playlist && copy != null) {
                 capturePlaylistReferences(uri, copy.toByteArray());
             }
+        } catch (UncheckedIOException e) {
+            throw e;
         } catch (IOException | RuntimeException e) {
             failed++;
             progress.report("Media capture failed: " + display +
@@ -187,6 +240,7 @@ public class MediaCapturer implements MediaSink {
             if (heartbeat != null) {
                 heartbeat.cancel(false);
             }
+            resourceCompleted.accept(uri.toString());
         }
     }
 
@@ -206,6 +260,8 @@ public class MediaCapturer implements MediaSink {
             for (URI reference : plan.references()) {
                 capture(reference.toString());
             }
+        } catch (UncheckedIOException e) {
+            throw e;
         } catch (IOException | RuntimeException e) {
             failed++;
             log.warn("Failed to parse media playlist {}", playlist, e);

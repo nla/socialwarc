@@ -141,4 +141,50 @@ class BlueskyEmbedModelTest {
                 unknown.uri());
         assertEquals(true, unknown.fields().get("blocked").asBoolean());
     }
+
+    @Test
+    void acceptsRecordWithMediaWrapperWithoutNestedTypeId() throws Exception {
+        var embed = SocialJson.mapper.readValue("""
+                {
+                  "$type": "app.bsky.embed.recordWithMedia#view",
+                  "media": {
+                    "$type": "app.bsky.embed.images#view",
+                    "images": [{
+                      "thumb": "https://cdn.example/thumb.jpg",
+                      "fullsize": "https://cdn.example/image.jpg",
+                      "alt": "Example"
+                    }]
+                  },
+                  "record": {
+                    "record": {
+                      "$type": "app.bsky.embed.record#viewRecord",
+                      "uri": "at://did:plc:bob/app.bsky.feed.post/quoted",
+                      "cid": "quoted-cid",
+                      "author": {
+                        "did": "did:plc:bob",
+                        "handle": "bob.example"
+                      },
+                      "value": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "Quoted post",
+                        "createdAt": "2026-07-29T07:00:00Z"
+                      },
+                      "embeds": [],
+                      "replyCount": 0,
+                      "repostCount": 0,
+                      "likeCount": 0,
+                      "quoteCount": 0,
+                      "indexedAt": "2026-07-29T07:00:01Z"
+                    }
+                  }
+                }
+                """, Embed.class);
+
+        var withMedia = assertInstanceOf(
+                Embed.RecordWithMediaView.class, embed);
+        assertInstanceOf(
+                Embed.ViewRecord.class, withMedia.record().record());
+        assertEquals(1, withMedia.attachments().size());
+        assertNotNull(withMedia.quotedPost(new Site("bluesky")));
+    }
 }

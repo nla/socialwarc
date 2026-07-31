@@ -66,6 +66,10 @@ public record PostView(
         return List.copyOf(urls);
     }
 
+    public List<String> videoUrls() {
+        return embed == null ? List.of() : embed.videoUrls();
+    }
+
     private static void addUrl(LinkedHashSet<String> urls, String value) {
         if (value != null && !value.isBlank()) {
             urls.add(value);

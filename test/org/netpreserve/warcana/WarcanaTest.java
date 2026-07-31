@@ -1,5 +1,6 @@
 package org.netpreserve.warcana;
 
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.netpreserve.jwarc.HttpResponse;
 import org.netpreserve.jwarc.MediaType;
@@ -9,15 +10,18 @@ import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
 import org.netpreserve.warcana.bluesky.model.PostView;
 import org.netpreserve.warcana.bluesky.model.Embed;
 import org.netpreserve.warcana.common.SocialJson;
+import org.netpreserve.warcana.common.collection.CollectionStore;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
 import org.netpreserve.warcana.mastodon.model.Status;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.attribute.FileTime;
 import java.util.Comparator;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -523,6 +527,170 @@ class WarcanaTest {
         }
     }
 
+    @Test
+    void searchesEveryCompletedWarcInACollection() throws Exception {
+        var root = Files.createTempDirectory("warcana-search-collection-");
+        try {
+            var store = new CollectionStore(root);
+            store.initialize();
+            var mastodonWarc = store.warcsDirectory().resolve("mastodon.warc");
+            var blueskyWarc = store.warcsDirectory().resolve("bluesky.warc");
+            try (var writer = new WarcWriter(mastodonWarc)) {
+                var http = new HttpResponse.Builder(200, "OK")
+                        .body(
+                                MediaType.JSON,
+                                ("[" + mastodonStatusJson() + "]")
+                                        .getBytes(StandardCharsets.UTF_8))
+                        .build();
+                writer.write(new WarcResponse.Builder(
+                        "https://example.social/api/v1/accounts/42/statuses?limit=40")
+                        .body(http)
+                        .build());
+            }
+            try (var writer = new WarcWriter(blueskyWarc)) {
+                var http = new HttpResponse.Builder(200, "OK")
+                        .body(
+                                MediaType.JSON,
+                                blueskyFeedJson().getBytes(StandardCharsets.UTF_8))
+                        .build();
+                writer.write(new WarcResponse.Builder(
+                        "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed" +
+                                "?actor=did%3Aplc%3Aexample&limit=100")
+                        .body(http)
+                        .build());
+            }
+
+            var stdout = new ByteArrayOutputStream();
+            var stderr = new ByteArrayOutputStream();
+            int result = Warcana.run(new String[]{
+                            "search",
+                            "--format", "json",
+                            root.toString()
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+
+            assertEquals(0, result, stderr.toString(StandardCharsets.UTF_8));
+            assertEquals(
+                    2,
+                    SocialJson.mapper.readTree(stdout.toByteArray())
+                            .get("totalHits").asInt());
+            assertTrue(Files.isDirectory(store.indexDirectory()));
+        } finally {
+            try (var paths = Files.walk(root)) {
+                for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.delete(path);
+                }
+            }
+        }
+    }
+
+    @Test
+    void collectionCreatesImmutableIncrementalWarcs() throws Exception {
+        HttpServer server;
+        try {
+            server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        } catch (java.net.SocketException e) {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                    false, "Loopback sockets are unavailable in this sandbox");
+            return;
+        }
+        var root = Files.createTempDirectory("warcana-incremental-collection-");
+        var statusRequests = new AtomicInteger();
+        server.createContext("/api/v1/accounts/lookup", exchange -> {
+            byte[] response = mastodonAccountJson().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.createContext("/api/v1/accounts/42/statuses", exchange -> {
+            statusRequests.incrementAndGet();
+            boolean paginated = exchange.getRequestURI().getRawQuery() != null &&
+                    exchange.getRequestURI().getRawQuery().contains("max_id=");
+            byte[] response = (paginated
+                    ? "[]"
+                    : "[" + mastodonStatusJson()
+                            .replace(
+                                    "https://media.example/attachment.mp4",
+                                    "file:///video.mp4")
+                            .replace(
+                                    "https://media.example/attachment-preview.jpg",
+                                    "file:///preview.jpg") + "]")
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var store = new CollectionStore(root);
+            store.initialize();
+            String serverBase = "http://127.0.0.1:" +
+                    server.getAddress().getPort();
+            Files.writeString(
+                    store.accountsFile(),
+                    "mastodon " + serverBase + "/@alice\n" +
+                            "mastodon " + serverBase + "/@bob\n");
+
+            var stdout = new ByteArrayOutputStream();
+            var stderr = new ByteArrayOutputStream();
+            int first = Warcana.run(new String[]{
+                            "archive", "--quiet", "--include-media",
+                            "--collection", root.toString()
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+            assertEquals(0, first, stderr.toString(StandardCharsets.UTF_8));
+            var firstWarcs = store.completedWarcs();
+            assertEquals(3, firstWarcs.size());
+            assertEquals(1, firstWarcs.stream()
+                    .filter(path -> path.getFileName().toString()
+                            .startsWith("warcana-posts-"))
+                    .count());
+            assertEquals(1, firstWarcs.stream()
+                    .filter(path -> path.getFileName().toString()
+                            .startsWith("warcana-media-"))
+                    .count());
+            assertEquals(1, firstWarcs.stream()
+                    .filter(path -> path.getFileName().toString()
+                            .startsWith("warcana-video-"))
+                    .count());
+            var firstPostsWarc = firstWarcs.stream()
+                    .filter(path -> path.getFileName().toString()
+                            .startsWith("warcana-posts-"))
+                    .findFirst()
+                    .orElseThrow();
+            byte[] firstBytes = Files.readAllBytes(firstPostsWarc);
+
+            stdout.reset();
+            stderr.reset();
+            int second = Warcana.run(new String[]{
+                            "archive", "--quiet", "--include-media",
+                            "--collection", root.toString()
+                    },
+                    new PrintStream(stdout),
+                    new PrintStream(stderr));
+            assertEquals(0, second, stderr.toString(StandardCharsets.UTF_8));
+            assertEquals(4, store.completedWarcs().size());
+            assertTrue(java.util.Arrays.equals(
+                    firstBytes,
+                    Files.readAllBytes(firstPostsWarc)));
+            assertEquals(6, statusRequests.get());
+            try (var jobs = Files.list(store.jobsDirectory())) {
+                assertEquals(0, jobs.count());
+            }
+        } finally {
+            server.stop(0);
+            try (var paths = Files.walk(root)) {
+                for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.delete(path);
+                }
+            }
+        }
+    }
+
     private static String mastodonStatusJson() {
         return """
                 {
@@ -558,6 +726,23 @@ class WarcanaTest {
                   "reblogs_count": 2,
                   "favourites_count": 3,
                   "replies_count": 1
+                }
+                """;
+    }
+
+    private static String mastodonAccountJson() {
+        return """
+                {
+                  "id": "42",
+                  "username": "alice",
+                  "acct": "alice",
+                  "url": "http://example.test/@alice",
+                  "display_name": "Alice",
+                  "note": "",
+                  "avatar": "",
+                  "avatar_static": "",
+                  "header": "",
+                  "header_static": ""
                 }
                 """;
     }

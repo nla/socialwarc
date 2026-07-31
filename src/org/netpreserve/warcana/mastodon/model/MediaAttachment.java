@@ -94,4 +94,16 @@ public record MediaAttachment(
                 .distinct()
                 .toList();
     }
+
+    public List<String> videoUrls() {
+        boolean video = "video".equalsIgnoreCase(type) ||
+                "gifv".equalsIgnoreCase(type);
+        if (!video) {
+            return List.of();
+        }
+        return java.util.stream.Stream.of(url, remoteUrl)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .toList();
+    }
 }

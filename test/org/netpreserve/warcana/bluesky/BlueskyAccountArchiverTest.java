@@ -7,6 +7,7 @@ import org.netpreserve.warcana.bluesky.model.Profile;
 import org.netpreserve.warcana.common.MediaCaptureStats;
 import org.netpreserve.warcana.common.MediaSink;
 import org.netpreserve.warcana.common.SocialJson;
+import org.netpreserve.warcana.common.ArchiveRunOptions;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -42,9 +43,9 @@ class BlueskyAccountArchiverTest {
         assertEquals(List.of(
                         "Looking up Bluesky account: alice.example",
                         "Found Bluesky account: alice.example",
-                        "Fetching Bluesky feed page 1...",
+                        "Fetching Bluesky feed page 1 for alice.example...",
                         "Fetched 2 feed items (2 total)",
-                        "Fetching Bluesky feed page 2...",
+                        "Fetching Bluesky feed page 2 for alice.example...",
                         "Fetched 1 feed item (3 total)"),
                 progress);
     }
@@ -68,6 +69,45 @@ class BlueskyAccountArchiverTest {
         assertEquals("did:plc:example", profile.did());
         assertEquals("next-page", page.cursor());
         assertEquals(1, page.feed().size());
+    }
+
+    @Test
+    void stopsAtPreviousHighWaterMarkAndCheckpointsThePage() throws Exception {
+        var api = new FakeApi();
+        var media = new RecordingMediaSink();
+        var checkpoints = new ArrayList<
+                org.netpreserve.warcana.common.ArchiveCheckpoint.PageCheckpoint>();
+        var archiver = new BlueskyAccountArchiver(
+                api, 100, media, ignored -> {
+                });
+
+        var result = archiver.archive(
+                "alice.example",
+                new ArchiveRunOptions(
+                        null,
+                        null,
+                        0,
+                        0,
+                        "at://did:plc:example/app.bsky.feed.post/two",
+                        null,
+                        null,
+                        0,
+                        0),
+                checkpoints::add);
+
+        assertEquals(1, result.feedItemsArchived());
+        assertEquals(1, result.pagesFetched());
+        assertEquals(
+                "at://did:plc:example/app.bsky.feed.post/one",
+                result.newestIdentity());
+        assertEquals(1, checkpoints.size());
+        assertEquals(null, checkpoints.get(0).cursor());
+        assertEquals(true, checkpoints.get(0).complete());
+        assertEquals(List.of(
+                        "https://cdn.example/avatar.png",
+                        "https://cdn.example/image.jpg",
+                        "https://cdn.example/image-thumb.jpg"),
+                List.copyOf(media.urls));
     }
 
     private static class FakeApi implements BlueskyApi {

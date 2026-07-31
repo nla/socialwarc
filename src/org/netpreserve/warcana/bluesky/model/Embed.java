@@ -2,6 +2,7 @@ package org.netpreserve.warcana.bluesky.model;
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeName;
@@ -38,6 +39,12 @@ public sealed interface Embed {
 
     default List<String> mediaUrls(boolean includeVideo) {
         return Collections.emptyList();
+    }
+
+    default List<String> videoUrls() {
+        var urls = new LinkedHashSet<>(mediaUrls(true));
+        urls.removeAll(mediaUrls(false));
+        return List.copyOf(urls);
     }
 
     default @Nullable Post quotedPost(Site site) {
@@ -198,7 +205,7 @@ public sealed interface Embed {
 
     @JsonTypeName("app.bsky.embed.recordWithMedia#view")
     record RecordWithMediaView(
-            RecordView record,
+            RecordViewWrapper record,
             Embed media) implements Embed {
 
         @Override
@@ -295,6 +302,23 @@ public sealed interface Embed {
                             includeVideo);
                 }
             }
+        }
+    }
+
+    /**
+     * The AppView sometimes omits $type from this nested wrapper even though
+     * the same shape is polymorphic when used as a top-level embed.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record RecordViewWrapper(RecordViewValue record) {
+        List<String> mediaUrls(boolean includeVideo) {
+            return record == null
+                    ? Collections.emptyList()
+                    : record.mediaUrls(includeVideo);
+        }
+
+        @Nullable Post quotedPost(Site site) {
+            return record == null ? null : record.quotedPost(site);
         }
     }
 

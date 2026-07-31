@@ -27,7 +27,7 @@ import java.util.List;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.netpreserve.jwarc.MessageVersion.HTTP_1_0;
 
-public class MastodonClient {
+public class MastodonClient implements MastodonApi {
     private final static Logger log = LoggerFactory.getLogger(MastodonClient.class);
     private final String server;
     private final String userAgent;

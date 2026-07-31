@@ -20,9 +20,22 @@ public class WarcPostScanner {
     }
 
     public long scan(Path input, PostConsumer consumer) throws IOException {
+        return scan(List.of(input), consumer);
+    }
+
+    public long scan(List<Path> inputs, PostConsumer consumer) throws IOException {
         Set<String> seen = new HashSet<>();
         long count = 0;
 
+        for (Path input : inputs) {
+            count += scanOne(input, consumer, seen);
+        }
+        return count;
+    }
+
+    private long scanOne(
+            Path input, PostConsumer consumer, Set<String> seen) throws IOException {
+        long count = 0;
         try (var reader = new WarcReader(input)) {
             while (true) {
                 var next = reader.next();

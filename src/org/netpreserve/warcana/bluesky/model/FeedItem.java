@@ -64,6 +64,10 @@ public record FeedItem(
         return List.copyOf(urls);
     }
 
+    public List<String> videoUrls() {
+        return post.videoUrls();
+    }
+
     public record Reason(
             @JsonProperty("$type") String type,
             Author by,

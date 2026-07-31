@@ -46,7 +46,6 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -103,7 +102,16 @@ public class WarcSearchIndex {
     public boolean ensureCurrent(
             Path warc, Path index, boolean rebuild,
             ProgressReporter progress) throws IOException {
-        if (!rebuild && isCurrent(warc, index)) {
+        return ensureCurrent(List.of(warc), index, rebuild, progress);
+    }
+
+    public boolean ensureCurrent(
+            List<Path> warcs, Path index, boolean rebuild,
+            ProgressReporter progress) throws IOException {
+        if (warcs.isEmpty()) {
+            throw new IOException("Collection contains no completed WARC files");
+        }
+        if (!rebuild && isCurrent(warcs, index)) {
             progress.report("Using search index: " + index.toAbsolutePath());
             return false;
         }
@@ -125,7 +133,7 @@ public class WarcSearchIndex {
 
         try {
             Files.createDirectories(temporary);
-            build(warc, temporary, progress);
+            build(warcs, temporary, progress);
             if (Files.exists(absoluteIndex)) {
                 deleteTree(absoluteIndex);
             }
@@ -205,6 +213,11 @@ public class WarcSearchIndex {
 
     private void build(
             Path warc, Path index, ProgressReporter progress) throws IOException {
+        build(List.of(warc), index, progress);
+    }
+
+    private void build(
+            List<Path> warcs, Path index, ProgressReporter progress) throws IOException {
         try (var directory = new NIOFSDirectory(index);
              Analyzer analyzer = new StandardAnalyzer();
              var writer = new IndexWriter(
@@ -213,7 +226,7 @@ public class WarcSearchIndex {
                              .setOpenMode(IndexWriterConfig.OpenMode.CREATE)
                              .setSimilarity(new BM25Similarity()))) {
             long[] count = {0};
-            scanner.scan(warc, scanned -> {
+            scanner.scan(warcs, scanned -> {
                 writer.updateDocument(
                         new Term(FIELD_ID, documentId(scanned)),
                         toDocument(scanned));
@@ -222,7 +235,7 @@ public class WarcSearchIndex {
                     progress.report("Indexed " + count[0] + " posts...");
                 }
             });
-            writer.setLiveCommitData(indexMetadata(warc).entrySet());
+            writer.setLiveCommitData(indexMetadata(warcs).entrySet());
             writer.commit();
             progress.report("Indexed " + count[0] + " posts");
         }
@@ -315,7 +328,7 @@ public class WarcSearchIndex {
         return options.query() != null && !options.query().isBlank();
     }
 
-    private static boolean isCurrent(Path warc, Path index) {
+    private static boolean isCurrent(List<Path> warcs, Path index) {
         if (!Files.isDirectory(index)) {
             return false;
         }
@@ -325,21 +338,35 @@ public class WarcSearchIndex {
             }
             try (var reader = DirectoryReader.open(directory)) {
                 return reader.getIndexCommit().getUserData()
-                        .equals(indexMetadata(warc));
+                        .equals(indexMetadata(warcs));
             }
         } catch (IOException | RuntimeException e) {
             return false;
         }
     }
 
-    private static Map<String, String> indexMetadata(Path warc) throws IOException {
-        Path source = warc.toAbsolutePath().normalize();
-        FileTime modified = Files.getLastModifiedTime(source);
+    private static Map<String, String> indexMetadata(List<Path> warcs) throws IOException {
         Map<String, String> metadata = new LinkedHashMap<>();
         metadata.put(META_SCHEMA, SCHEMA_VERSION);
-        metadata.put(META_SOURCE, source.toString());
-        metadata.put(META_SIZE, Long.toString(Files.size(source)));
-        metadata.put(META_MODIFIED, Long.toString(modified.toMillis()));
+        var sources = new StringBuilder();
+        long size = 0;
+        long modified = 0;
+        for (Path warc : warcs) {
+            Path source = warc.toAbsolutePath().normalize();
+            sources.append(source)
+                    .append('\t')
+                    .append(Files.size(source))
+                    .append('\t')
+                    .append(Files.getLastModifiedTime(source).toMillis())
+                    .append('\n');
+            size += Files.size(source);
+            modified = Math.max(
+                    modified,
+                    Files.getLastModifiedTime(source).toMillis());
+        }
+        metadata.put(META_SOURCE, sources.toString());
+        metadata.put(META_SIZE, Long.toString(size));
+        metadata.put(META_MODIFIED, Long.toString(modified));
         return metadata;
     }
 
