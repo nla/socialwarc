@@ -721,6 +721,9 @@ class WarcanaTest {
                     ? "[]"
                     : "[" + mastodonStatusJson()
                             .replace(
+                                    "https://example.social/avatar.png",
+                                    "file:///avatar.png")
+                            .replace(
                                     "https://media.example/attachment.mp4",
                                     "file:///video.mp4")
                             .replace(

@@ -32,6 +32,7 @@ public class MastodonClient implements MastodonApi {
     private final String server;
     private final String userAgent;
     private final WarcWriter warcWriter;
+    private final boolean rateLimited;
     private static final FailsafeExecutor<HttpResponse> failsafe = Failsafe.with(
             RetryPolicy.<HttpResponse>builder()
                     .handleResultIf(response -> response.status() >= 400)
@@ -52,6 +53,27 @@ public class MastodonClient implements MastodonApi {
                     .withSuccessThreshold(1)
                     .withDelay(Duration.ofMinutes(30))
                     .build());
+    private static final FailsafeExecutor<HttpResponse> unthrottledFailsafe =
+            Failsafe.with(
+                    RetryPolicy.<HttpResponse>builder()
+                            .handleResultIf(response -> response.status() >= 400)
+                            .handle(IOException.class)
+                            .withBackoff(10, 10 * 60, ChronoUnit.SECONDS, 4)
+                            .onRetry(e -> log.warn(
+                                    "Failure #{}. Retrying.",
+                                    e.getAttemptCount(),
+                                    e.getLastException()))
+                            .build(),
+                    CircuitBreaker.<HttpResponse>builder()
+                            .handleResultIf(response -> response.status() >= 400)
+                            .handle(IOException.class)
+                            .onOpen(e -> log.warn("Circuit breaker open"))
+                            .onClose(e -> log.warn("Circuit breaker closed"))
+                            .onHalfOpen(e -> log.warn("Circuit breaker half-opened"))
+                            .withFailureThreshold(8)
+                            .withSuccessThreshold(1)
+                            .withDelay(Duration.ofMinutes(30))
+                            .build());
 
     public MastodonClient(String server, String userAgent, WarcWriter warcWriter) {
         if (!server.startsWith("https://") && !server.startsWith("http://")) {
@@ -60,6 +82,7 @@ public class MastodonClient implements MastodonApi {
         this.server = server.replaceFirst("/+$", "");
         this.userAgent = userAgent;
         this.warcWriter = warcWriter;
+        this.rateLimited = !isLoopbackServer(this.server);
     }
 
     public Account lookupAccount(String acct) throws IOException {
@@ -115,7 +138,8 @@ public class MastodonClient implements MastodonApi {
     private <T> T sendRequest(String path, Class<T> returnType) throws IOException {
         HttpResponse httpResponse;
         try {
-            httpResponse = failsafe.get(() -> sendRequestInner(path));
+            httpResponse = (rateLimited ? failsafe : unthrottledFailsafe)
+                    .get(() -> sendRequestInner(path));
         } catch (FailsafeException e) {
             if (e.getCause() instanceof IOException ioException) {
                 throw ioException;
@@ -126,6 +150,14 @@ public class MastodonClient implements MastodonApi {
             throw new IOException("Unexpected response " + httpResponse.status() + " " + httpResponse.reason() + " from " + server + path);
         }
         return SocialJson.mapper.readValue(httpResponse.body().stream(), returnType);
+    }
+
+    private static boolean isLoopbackServer(String server) {
+        String host = URI.create(server).getHost();
+        return host != null &&
+                (host.equalsIgnoreCase("localhost") ||
+                        host.equals("::1") ||
+                        host.startsWith("127."));
     }
 
     @NonNull
