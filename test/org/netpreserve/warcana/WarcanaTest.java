@@ -652,12 +652,11 @@ class WarcanaTest {
                             "warcana-posts-example.warc"),
                     new byte[]{1, 2, 3});
             var state = store.loadCollectionState();
-            state.mediaOpenWarc =
-                    "warcs/warcana-media-example.warc.open";
-            state.mediaFinalWarc =
-                    "warcs/warcana-media-example.warc";
+            state.media.setPaths(
+                    "warcs/warcana-media-example.warc.open",
+                    "warcs/warcana-media-example.warc");
             Files.write(
-                    root.resolve(state.mediaOpenWarc),
+                    root.resolve(state.media.openWarc()),
                     new byte[]{4, 5});
             store.saveCollectionState(state);
             var job = new CollectionJob();

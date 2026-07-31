@@ -31,9 +31,9 @@ public class CollectionInspector {
             completedBytes += size;
         }
 
-        addOpen(files, store, state.openWarc, "posts");
-        addOpen(files, store, state.mediaOpenWarc, "media");
-        addOpen(files, store, state.videoOpenWarc, "video");
+        addOpen(files, store, state.posts.openWarc(), "posts");
+        addOpen(files, store, state.media.openWarc(), "media");
+        addOpen(files, store, state.video.openWarc(), "video");
 
         var completedByKind =
                 new LinkedHashMap<String, CollectionInspection.FileSet>();

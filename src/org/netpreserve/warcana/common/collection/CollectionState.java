@@ -4,17 +4,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class CollectionState {
-    public int version = 1;
+    public static final int CURRENT_VERSION = 2;
+
+    public int version = CURRENT_VERSION;
     public Map<String, AccountProgress> accounts = new LinkedHashMap<>();
-    public String openWarc;
-    public String finalWarc;
-    public long openCommittedOffset;
-    public String mediaOpenWarc;
-    public String mediaFinalWarc;
-    public long mediaCommittedOffset;
-    public String videoOpenWarc;
-    public String videoFinalWarc;
-    public long videoCommittedOffset;
+    public WarcStreamState posts = new WarcStreamState();
+    public WarcStreamState media = new WarcStreamState();
+    public WarcStreamState video = new WarcStreamState();
 
     public CollectionState() {
     }

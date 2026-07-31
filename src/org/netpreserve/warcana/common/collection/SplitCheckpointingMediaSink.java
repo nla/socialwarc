@@ -107,7 +107,7 @@ public class SplitCheckpointingMediaSink implements MediaSink, AutoCloseable {
             job.seenMedia.add(url);
             job.seenMedia.addAll(capturer.seenUrls());
             updateMediaStats();
-            job.mediaCommittedOffset = mediaWriter.position();
+            job.media.setCommittedOffset(mediaWriter.position());
             checkpoint();
         }
     }
@@ -124,7 +124,7 @@ public class SplitCheckpointingMediaSink implements MediaSink, AutoCloseable {
             job.seenVideo.add(url);
             job.seenVideo.addAll(capturer.seenUrls());
             updateVideoStats();
-            job.videoCommittedOffset = videoWriter.position();
+            job.video.setCommittedOffset(videoWriter.position());
             checkpoint();
         }
     }
@@ -182,14 +182,14 @@ public class SplitCheckpointingMediaSink implements MediaSink, AutoCloseable {
     private void mediaResourceCompleted(String url) {
         job.seenMedia.add(url);
         updateMediaStats();
-        job.mediaCommittedOffset = mediaWriter.position();
+        job.media.setCommittedOffset(mediaWriter.position());
         checkpoint();
     }
 
     private void videoResourceCompleted(String url) {
         job.seenVideo.add(url);
         updateVideoStats();
-        job.videoCommittedOffset = videoWriter.position();
+        job.video.setCommittedOffset(videoWriter.position());
         checkpoint();
     }
 

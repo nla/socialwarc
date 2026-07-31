@@ -81,7 +81,7 @@ public class CheckpointingMediaSink implements MediaSink {
             job.mediaFailed = stats.failed();
             job.mediaSkipped = stats.skipped();
             job.mediaBytes = stats.bytes();
-            job.committedOffset = writer.position();
+            job.posts.setCommittedOffset(writer.position());
             checkpoint();
         }
     }
@@ -98,7 +98,7 @@ public class CheckpointingMediaSink implements MediaSink {
     private void checkpoint() {
         try {
             // The API response that disclosed these URLs is now safe to retain.
-            job.committedOffset = writer.position();
+            job.posts.setCommittedOffset(writer.position());
             store.saveJob(job);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -112,7 +112,7 @@ public class CheckpointingMediaSink implements MediaSink {
         job.mediaFailed = stats.failed();
         job.mediaSkipped = stats.skipped();
         job.mediaBytes = stats.bytes();
-        job.committedOffset = writer.position();
+        job.posts.setCommittedOffset(writer.position());
         checkpoint();
     }
 }

@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.util.Comparator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CollectionStoreTest {
@@ -41,18 +42,46 @@ class CollectionStoreTest {
             job.key = CollectionStore.accountKey("mastodon", accounts.get(0).account());
             job.account = accounts.get(0).account();
             job.platform = "mastodon";
-            job.openWarc = "warcs/example.warc.open";
-            job.finalWarc = "warcs/example.warc";
-            job.committedOffset = 1234;
+            job.posts.setPaths(
+                    "warcs/example.warc.open",
+                    "warcs/example.warc");
+            job.posts.setCommittedOffset(1234);
             job.pendingMedia.add("https://example.social/image.jpg");
             store.saveJob(job);
 
             var loaded = store.loadJob(job.key);
-            assertEquals(1234, loaded.committedOffset);
+            assertEquals(1234, loaded.posts.committedOffset());
             assertEquals(job.pendingMedia, loaded.pendingMedia);
         } finally {
             try (var paths = Files.walk(root)) {
                 for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.delete(path);
+                }
+            }
+        }
+    }
+
+    @Test
+    void rejectsUnsupportedPersistedSchemaVersions() throws Exception {
+        var root = Files.createTempDirectory("warcana-schema-version-");
+        try {
+            var store = new CollectionStore(root);
+            store.initialize();
+            Files.writeString(
+                    store.collectionStateFile(), "{\"version\":1}");
+            assertThrows(
+                    java.io.IOException.class,
+                    store::loadCollectionState);
+
+            Files.writeString(
+                    store.jobFile("old-job"), "{\"version\":1}");
+            assertThrows(
+                    java.io.IOException.class,
+                    () -> store.loadJob("old-job"));
+        } finally {
+            try (var paths = Files.walk(root)) {
+                for (var path :
+                        paths.sorted(Comparator.reverseOrder()).toList()) {
                     Files.delete(path);
                 }
             }
@@ -69,17 +98,18 @@ class CollectionStoreTest {
             job.key = "resume-test";
             job.account = "@alice@example.social";
             job.platform = "mastodon";
-            job.openWarc = "warcs/resume.warc.open";
-            job.finalWarc = "warcs/resume.warc";
+            job.posts.setPaths(
+                    "warcs/resume.warc.open",
+                    "warcs/resume.warc");
             job.pendingMedia.add("file:///unsafe-but-durable");
             store.saveJob(job);
 
-            var open = root.resolve(job.openWarc);
+            var open = root.resolve(job.posts.openWarc());
             try (var writer = new WarcWriter(open)) {
                 writer.write(new Warcinfo.Builder()
                         .filename("resume.warc")
                         .build());
-                job.committedOffset = writer.position();
+                job.posts.setCommittedOffset(writer.position());
                 store.saveJob(job);
                 var sink = new CheckpointingMediaSink(
                         store,
@@ -98,7 +128,7 @@ class CollectionStoreTest {
             assertTrue(resumed.pendingMedia.isEmpty());
             assertTrue(resumed.seenMedia.contains("file:///unsafe-but-durable"));
             assertEquals(1, resumed.mediaSkipped);
-            assertTrue(resumed.committedOffset > 0);
+            assertTrue(resumed.posts.committedOffset() > 0);
         } finally {
             try (var paths = Files.walk(root)) {
                 for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {

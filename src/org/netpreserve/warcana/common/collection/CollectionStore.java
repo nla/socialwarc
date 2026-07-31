@@ -129,7 +129,15 @@ public class CollectionStore {
         if (!Files.exists(collectionStateFile())) {
             return new CollectionState();
         }
-        return SocialJson.mapper.readValue(collectionStateFile().toFile(), CollectionState.class);
+        CollectionState state = SocialJson.mapper.readValue(
+                collectionStateFile().toFile(), CollectionState.class);
+        if (state.version != CollectionState.CURRENT_VERSION) {
+            throw new IOException(
+                    "Unsupported collection state version " + state.version +
+                            " (expected " +
+                            CollectionState.CURRENT_VERSION + ")");
+        }
+        return state;
     }
 
     public synchronized void saveCollectionState(CollectionState state) throws IOException {
@@ -145,7 +153,15 @@ public class CollectionStore {
         if (!Files.exists(path)) {
             return null;
         }
-        return SocialJson.mapper.readValue(path.toFile(), CollectionJob.class);
+        CollectionJob job = SocialJson.mapper.readValue(
+                path.toFile(), CollectionJob.class);
+        if (job.version != CollectionJob.CURRENT_VERSION) {
+            throw new IOException(
+                    "Unsupported collection job version " + job.version +
+                            " (expected " +
+                            CollectionJob.CURRENT_VERSION + "): " + path);
+        }
+        return job;
     }
 
     public synchronized void saveJob(CollectionJob job) throws IOException {
