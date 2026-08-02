@@ -2,8 +2,8 @@
 
 Warcana archives public Mastodon and Bluesky accounts and Mastodon local
 public timelines to WARC, captures linked media, extracts a common social-post
-model, and provides full-text search. It can also index legacy Twitter
-responses found in existing WARCs.
+model, and provides full-text search. It can also index Threads profile pages
+and legacy Twitter responses found in existing WARCs.
 
 It requires Java 21 or newer.
 
@@ -105,8 +105,9 @@ java -jar target/warcana-0.1.0.jar search collection "climate archive"
 ```
 
 The index is rebuilt automatically whenever the completed WARC set changes.
-Legacy Twitter API responses in existing WARCs are also recognized and can be
-filtered with `--platform twitter`.
+Threads profile pages and legacy Twitter API responses in existing WARCs are
+also recognized and can be filtered with `--platform threads` or
+`--platform twitter`.
 
 Browse and manage a collection in the local interface:
 

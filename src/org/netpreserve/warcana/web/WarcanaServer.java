@@ -3,6 +3,7 @@ package org.netpreserve.warcana.web;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import org.jsoup.Jsoup;
 import org.netpreserve.jwarc.WarcReader;
 import org.netpreserve.jwarc.WarcResponse;
 import org.netpreserve.warcana.CliSupport;
@@ -226,6 +227,7 @@ public final class WarcanaServer implements AutoCloseable {
         if (platform != null &&
                 !"mastodon".equals(platform) &&
                 !"bluesky".equals(platform) &&
+                !"threads".equals(platform) &&
                 !"twitter".equals(platform)) {
             throw new IllegalArgumentException("Unknown platform");
         }
@@ -527,13 +529,34 @@ public final class WarcanaServer implements AutoCloseable {
                     !hit.warcRecordId().equals(response.id().toString())) {
                 throw new IOException("Post search index is stale");
             }
-            JsonNode root = SocialJson.mapper.readTree(
-                    response.http().bodyDecoded().stream());
-            return findOriginalJson(
-                    root,
-                    hit.platform(),
-                    quoted ? null : hit.identity(),
-                    targetUrl);
+            if ("threads".equals(hit.platform())) {
+                var document = Jsoup.parse(
+                        response.http().bodyDecoded().stream(), null,
+                        response.target().toString());
+                for (var script : document.select(
+                        "script[type=application/json]")) {
+                    if (!script.data().contains("\"thread_items\"")) {
+                        continue;
+                    }
+                    JsonNode found = findOriginalJson(
+                            SocialJson.mapper.readTree(script.data()),
+                            hit.platform(),
+                            quoted ? null : hit.identity(),
+                            targetUrl);
+                    if (found != null) {
+                        return found;
+                    }
+                }
+                return null;
+            } else {
+                JsonNode root = SocialJson.mapper.readTree(
+                        response.http().bodyDecoded().stream());
+                return findOriginalJson(
+                        root,
+                        hit.platform(),
+                        quoted ? null : hit.identity(),
+                        targetUrl);
+            }
         }
     }
 
@@ -558,6 +581,10 @@ public final class WarcanaServer implements AutoCloseable {
                 if (matchesBluesky(node, identity, targetUrl)) {
                     return node;
                 }
+            }
+            if ("threads".equals(platform) &&
+                    matchesThreads(node, identity, targetUrl)) {
+                return node;
             }
             for (var property : node.properties()) {
                 JsonNode found = findOriginalJson(
@@ -594,6 +621,18 @@ public final class WarcanaServer implements AutoCloseable {
         return handle != null && slash >= 0 && targetUrl.equals(
                 "https://bsky.app/profile/" + handle + "/post/" +
                         uri.substring(slash + 1));
+    }
+
+    private static boolean matchesThreads(
+            JsonNode node, String identity, String targetUrl) {
+        String code = text(node, "code");
+        JsonNode user = node.get("user");
+        String username = user == null ? null : text(user, "username");
+        if (code == null || username == null) {
+            return false;
+        }
+        String url = "https://www.threads.com/@" + username + "/post/" + code;
+        return targetUrl.equals(url) || identity != null && identity.equals(url);
     }
 
     private static String text(JsonNode node, String name) {

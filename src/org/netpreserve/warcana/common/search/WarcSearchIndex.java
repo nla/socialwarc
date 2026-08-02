@@ -74,7 +74,7 @@ import java.util.logging.Logger;
  * Builds and queries a persistent Lucene sidecar index for a WARC.
  */
 public class WarcSearchIndex {
-    private static final String SCHEMA_VERSION = "10";
+    private static final String SCHEMA_VERSION = "11";
     private static final String META_SCHEMA = "warcana.schema";
     private static final String META_SOURCE = "warcana.source";
     private static final String META_SIZE = "warcana.source.size";

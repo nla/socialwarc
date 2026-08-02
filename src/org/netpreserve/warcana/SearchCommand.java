@@ -272,7 +272,7 @@ final class SearchCommand {
                 " [options] WARC_FILE_OR_COLLECTION [QUERY]");
         stream.println();
         stream.println(
-                "Full-text searches Mastodon, Bluesky and legacy Twitter posts.");
+                "Full-text searches Mastodon, Bluesky, Threads and legacy Twitter posts.");
         stream.println("With no query, lists the most recent posts first.");
         stream.println("The first search builds a reusable sidecar index. " +
                 "Collections use");
@@ -283,7 +283,7 @@ final class SearchCommand {
         stream.println("Options:");
         stream.println("  --index DIRECTORY  Use a custom index directory");
         stream.println("  --reindex          Rebuild the search index");
-        stream.println("  --platform NAME    Filter by mastodon, bluesky or twitter");
+        stream.println("  --platform NAME    Filter by mastodon, bluesky, threads or twitter");
         stream.println("  --author HANDLE    Filter by exact author handle");
         stream.println("  --since DATE       Include posts on or after DATE");
         stream.println("  --until DATE       Include posts on or before DATE");

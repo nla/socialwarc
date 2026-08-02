@@ -70,6 +70,7 @@ final class CollectionHtmlRenderer {
                 .append(option("", "All", query.get("platform")))
                 .append(option("mastodon", "Mastodon", query.get("platform")))
                 .append(option("bluesky", "Bluesky", query.get("platform")))
+                .append(option("threads", "Threads", query.get("platform")))
                 .append(option("twitter", "Twitter", query.get("platform")))
                 .append("</select></label>")
                 .append("<label>Sort <select name=sort>")
@@ -756,6 +757,10 @@ final class CollectionHtmlRenderer {
             filters.add("Mastodon");
         } else if ("bluesky".equals(platform)) {
             filters.add("Bluesky");
+        } else if ("threads".equals(platform)) {
+            filters.add("Threads");
+        } else if ("twitter".equals(platform)) {
+            filters.add("Twitter");
         }
         if (present(query, "author")) {
             filters.add("@" + query.get("author").replaceFirst("^@", ""));

@@ -3,6 +3,7 @@ package org.netpreserve.warcana;
 import org.netpreserve.warcana.bluesky.BlueskyWarcResponseExtractor;
 import org.netpreserve.warcana.common.WarcResponseExtractor;
 import org.netpreserve.warcana.mastodon.MastodonWarcResponseExtractor;
+import org.netpreserve.warcana.threads.ThreadsWarcResponseExtractor;
 import org.netpreserve.warcana.twitter.TwitterWarcResponseExtractor;
 
 import java.time.Instant;
@@ -15,6 +16,7 @@ public final class CliSupport {
     enum Platform {
         MASTODON,
         BLUESKY,
+        THREADS,
         TWITTER;
 
         static Platform parse(String value) {
@@ -23,7 +25,7 @@ public final class CliSupport {
             } catch (IllegalArgumentException e) {
                 throw new IllegalArgumentException(
                         "Unknown platform '" + value +
-                                "' (expected mastodon, bluesky or twitter)");
+                                "' (expected mastodon, bluesky, threads or twitter)");
             }
         }
     }
@@ -32,6 +34,7 @@ public final class CliSupport {
         return List.of(
                 new MastodonWarcResponseExtractor(),
                 new BlueskyWarcResponseExtractor(),
+                new ThreadsWarcResponseExtractor(),
                 new TwitterWarcResponseExtractor());
     }
 
