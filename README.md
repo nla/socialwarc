@@ -2,7 +2,8 @@
 
 Warcana archives public Mastodon and Bluesky accounts and Mastodon local
 public timelines to WARC, captures linked media, extracts a common social-post
-model, and provides full-text search.
+model, and provides full-text search. It can also index legacy Twitter
+responses found in existing WARCs.
 
 It requires Java 21 or newer.
 
@@ -75,11 +76,13 @@ resumes the API cursor, and drains any persisted media queue. HLS child
 resources are checkpointed independently, so completed segments do not need
 to be downloaded again.
 
-Only one archive process may write a collection at a time. Accounts are
-processed sequentially. If an account fails, the shared WARC remains open and
-later accounts wait until the failed account is successfully resumed. This
-ensures recovery can truncate to the last checkpoint without discarding
-records belonging to another account.
+Only one archive process may write a collection at a time. Targets on
+different servers are captured concurrently, while all requests to an
+individual server are serialized. Each HTTP exchange is staged before it is
+atomically appended to a shared run WARC, so concurrent targets cannot leave
+partial interleaved records after an interruption. A failed target is recorded
+in collection state and does not stop the other targets. Every run closes its
+WARCs, including small ones, so they are ready for permanent ingest.
 
 Bounds are stored with a job and therefore remain stable across restarts:
 
@@ -102,6 +105,8 @@ java -jar target/warcana-0.1.0.jar search collection "climate archive"
 ```
 
 The index is rebuilt automatically whenever the completed WARC set changes.
+Legacy Twitter API responses in existing WARCs are also recognized and can be
+filtered with `--platform twitter`.
 
 Browse and manage a collection in the local interface:
 
@@ -118,7 +123,62 @@ monitors captures, and persists a recurring interval schedule in
 process is running. Use `--host` and `--port` to change the listening address;
 the default is accessible only from the local machine. For safety, the Manage
 area accepts connections only from the local machine even when Browse is bound
-to a network-accessible address.
+to a network-accessible address. Failed targets and their last error appear on
+the Manage page, where they can be disabled, re-enabled, or cleared.
+
+### Optional OpenID Connect
+
+The Manage area can use Keycloak OpenID Connect instead of the loopback-only
+check. Users must have the `panadmin` realm role (configurable). Configure a
+confidential client with standard flow enabled and this callback URL:
+
+```text
+https://warcana.example/oidc/callback
+```
+
+Set the following environment variables when starting `serve`:
+
+```sh
+WARCANA_COLLECTION=/collections/social \
+WARCANA_HOST=0.0.0.0 \
+WARCANA_PORT=8080 \
+WARCANA_PUBLIC_URL=https://warcana.example/ \
+WARCANA_OIDC_ISSUER=https://keycloak.example/realms/archive \
+WARCANA_OIDC_CLIENT_ID=warcana \
+WARCANA_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc-client-secret \
+java -jar target/warcana-0.1.0.jar serve
+```
+
+`WARCANA_OIDC_CLIENT_SECRET` may be used instead of the mounted secret file.
+OIDC is disabled when the OIDC variables are absent. The public URL currently
+must be an origin without a path component.
+
+### Bamboo archival storage
+
+To ingest each completed scheduled run into Bamboo, set the Bamboo URL and
+destination crawl-series ID:
+
+```sh
+WARCANA_BAMBOO_URL=https://pandas.example/bamboo \
+WARCANA_BAMBOO_SERIES_ID=1234
+```
+
+Completed run WARCs are placed in a durable outbox before upload. Temporary
+Bamboo or network failures are retried with backoff, and crawl creation and
+WARC uploads are idempotent. When OIDC is configured, Bamboo ingest uses the
+same issuer, client ID, and secret with the Keycloak client-credentials flow.
+
+Existing Bamboo crawl series can be included in Browse and Search by listing
+their IDs:
+
+```sh
+WARCANA_BAMBOO_INDEX_SERIES_IDS=1234,5678
+```
+
+Warcana indexes those WARCs directly from Bamboo using HTTP range requests.
+It does not download or retain complete Bamboo WARCs locally; Bamboo remains
+the authoritative long-term copy. The list is read when `serve` starts, so
+restart the process after adding crawls externally.
 
 Inspect a collection:
 

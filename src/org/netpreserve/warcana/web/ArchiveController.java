@@ -1,6 +1,9 @@
 package org.netpreserve.warcana.web;
 
 import org.netpreserve.warcana.ArchiveCommand;
+import org.netpreserve.warcana.bamboo.BambooConfiguration;
+import org.netpreserve.warcana.bamboo.BambooIngestWorker;
+import org.netpreserve.warcana.bamboo.BambooOutboxItem;
 import org.netpreserve.warcana.common.collection.CollectionStore;
 
 import java.io.ByteArrayOutputStream;
@@ -39,7 +42,13 @@ final class ArchiveController implements AutoCloseable {
 
     record Status(boolean running, Instant startedAt, Instant finishedAt,
                   Integer exitCode, Instant nextRun, Settings settings,
-                  List<String> output) {
+                  List<String> output, boolean bambooEnabled,
+                  List<BambooBatchStatus> bambooBatches) {
+    }
+
+    record BambooBatchStatus(
+            String id, String status, int uploaded, int total,
+            int attempts, String lastError, String nextAttemptAt) {
     }
 
     private final CollectionStore store;
@@ -47,6 +56,7 @@ final class ArchiveController implements AutoCloseable {
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor();
     private final ArrayDeque<String> output = new ArrayDeque<>();
+    private final BambooIngestWorker bambooWorker;
     private Settings settings;
     private Future<?> run;
     private Thread runThread;
@@ -58,9 +68,28 @@ final class ArchiveController implements AutoCloseable {
     private Integer exitCode;
 
     ArchiveController(CollectionStore store) throws IOException {
+        this(store, null);
+    }
+
+    ArchiveController(
+            CollectionStore store, BambooConfiguration bambooConfiguration)
+            throws IOException {
         this.store = store;
+        bambooWorker = bambooConfiguration == null ||
+                !bambooConfiguration.ingestEnabled()
+                ? null
+                : new BambooIngestWorker(store, bambooConfiguration);
         settings = loadSettings();
         reschedule();
+        if (bambooWorker != null) {
+            BambooOutboxItem queued = bambooWorker.outbox()
+                    .enqueueMissing(store.completedWarcs());
+            if (queued != null) {
+                append("Queued " + queued.files.size() +
+                        " existing WARC files for Bamboo ingest");
+            }
+            bambooWorker.start();
+        }
     }
 
     synchronized boolean start() {
@@ -105,7 +134,28 @@ final class ArchiveController implements AutoCloseable {
     synchronized Status status() {
         return new Status(
                 running, startedAt, finishedAt,
-                exitCode, nextRun, settings, List.copyOf(output));
+                exitCode, nextRun, settings, List.copyOf(output),
+                bambooWorker != null, bambooStatus());
+    }
+
+    private List<BambooBatchStatus> bambooStatus() {
+        if (bambooWorker == null) {
+            return List.of();
+        }
+        try {
+            return bambooWorker.outbox().pending().stream()
+                    .map(item -> new BambooBatchStatus(
+                            item.id, item.status,
+                            (int) item.files.stream()
+                                    .filter(file -> file.uploaded).count(),
+                            item.files.size(), item.attempts,
+                            item.lastError, item.nextAttemptAt))
+                    .toList();
+        } catch (IOException e) {
+            return List.of(new BambooBatchStatus(
+                    "outbox", "unreadable", 0, 0, 0,
+                    e.getMessage(), null));
+        }
     }
 
     private void execute() {
@@ -134,6 +184,20 @@ final class ArchiveController implements AutoCloseable {
         } catch (RuntimeException e) {
             append("Capture failed: " + e.getMessage());
             result = 1;
+        }
+        if (bambooWorker != null) {
+            try {
+                var item = bambooWorker.outbox()
+                        .enqueueMissing(store.completedWarcs());
+                if (item != null) {
+                    append("Queued " + item.files.size() +
+                            " WARC files for Bamboo ingest");
+                    bambooWorker.trigger();
+                }
+            } catch (IOException e) {
+                append("Unable to queue Bamboo ingest: " + e.getMessage());
+                result = 1;
+            }
         }
         synchronized (this) {
             exitCode = result;
@@ -243,6 +307,9 @@ final class ArchiveController implements AutoCloseable {
         }
         runner.shutdownNow();
         scheduler.shutdownNow();
+        if (bambooWorker != null) {
+            bambooWorker.close();
+        }
     }
 
     private final class LineOutput extends OutputStream {

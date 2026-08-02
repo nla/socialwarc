@@ -1,6 +1,5 @@
 package org.netpreserve.warcana;
 
-import org.netpreserve.jwarc.Warcinfo;
 import org.netpreserve.warcana.bluesky.AtProtocolClient;
 import org.netpreserve.warcana.bluesky.BlueskyAccountArchiver;
 import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
@@ -20,31 +19,28 @@ import org.netpreserve.warcana.mastodon.MastodonServerReference;
 
 import java.io.IOException;
 import java.io.PrintStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.function.Function;
 
 final class CollectionJobRunner {
     private final CollectionStore store;
     private final ArchiveOptions options;
     private final PrintStream out;
     private final ProgressReporter progress;
+    private final CollectionRunWriters runWriters;
+    private final CollectionState collectionState;
 
     CollectionJobRunner(
             CollectionStore store,
             ArchiveOptions options,
             PrintStream out,
-            ProgressReporter progress) {
+            ProgressReporter progress,
+            CollectionRunWriters runWriters) {
         this.store = store;
         this.options = options;
         this.out = out;
         this.progress = progress;
+        this.runWriters = runWriters;
+        collectionState = runWriters.state();
     }
 
     void run(
@@ -56,49 +52,32 @@ final class CollectionJobRunner {
         String targetType = localTimeline ? "mastodon-local" : platformName;
         String key = CollectionStore.accountKey(
                 targetType, accountArgument);
-        CollectionState collectionState = store.loadCollectionState();
-        CollectionState.AccountProgress previous =
-                collectionState.accounts.get(key);
-        CollectionJob job = store.loadJob(key);
-
-        if (job != null &&
-                Files.exists(store.root().resolve(
-                        job.posts.finalWarc()))) {
-            finalizeJob(collectionState, job);
-            store.log("RECOVERED-COMPLETE " + platformName + " " +
-                    accountArgument + " warc=" +
-                    job.posts.finalWarc());
-            out.printf("Recovered completed archive for %s: %s%n",
-                    accountArgument,
-                    store.root().resolve(job.posts.finalWarc()));
-            return;
+        CollectionState.AccountProgress previous;
+        synchronized (collectionState) {
+            previous = collectionState.accounts.get(key);
         }
+        CollectionJob job = store.loadJob(key);
 
         boolean resumed = job != null;
         if (job == null) {
             job = createJob(
                     key, accountArgument, platform, localTimeline,
-                    previous, collectionState);
+                    previous);
         } else {
-            resumeJob(accountArgument, job, collectionState);
+            resumeJob(accountArgument, job);
         }
 
         runJob(
-                accountArgument, platform, platformName, job,
-                collectionState, resumed);
+                accountArgument, platform, job);
 
-        for (var stream : CollectionWarcStream.values()) {
-            stream.copyToState(job, collectionState);
-        }
-        finalizeJob(collectionState, job);
+        finalizeJob(job);
         store.log("ACCOUNT-COMPLETE " + platformName + " " +
                 accountArgument + " posts=" + job.postsArchived +
-                " openWarc=" + job.posts.openWarc());
-        out.printf("%sArchived %d posts from %s into %s%n",
+                " shared-collection-warc");
+        out.printf("%sArchived %d posts from %s%n",
                 resumed ? "Resumed and " : "",
                 job.postsArchived,
-                accountArgument,
-                store.root().resolve(job.posts.openWarc()));
+                accountArgument);
         ArchiveCommand.printMediaSummary(
                 out, job.includeMedia, new MediaCaptureStats(
                         job.mediaCaptured,
@@ -107,13 +86,70 @@ final class CollectionJobRunner {
                         job.mediaBytes));
     }
 
+    boolean isDisabled(
+            String accountArgument,
+            ArchivePlatform platform,
+            boolean localTimeline) {
+        String key = CollectionStore.accountKey(
+                localTimeline ? "mastodon-local" : platform.externalName(),
+                accountArgument);
+        synchronized (collectionState) {
+            CollectionState.AccountProgress account =
+                    collectionState.accounts.get(key);
+            return account != null && account.disabled;
+        }
+    }
+
+    void recordFailure(
+            String accountArgument,
+            ArchivePlatform platform,
+            boolean localTimeline,
+            Throwable failure) throws IOException {
+        String key = CollectionStore.accountKey(
+                localTimeline ? "mastodon-local" : platform.externalName(),
+                accountArgument);
+        Throwable cause = failure instanceof java.io.UncheckedIOException
+                ? failure.getCause()
+                : failure;
+        String message = cause.getMessage() == null
+                ? cause.getClass().getSimpleName()
+                : cause.getMessage();
+        String now = Instant.now().toString();
+        synchronized (collectionState) {
+            CollectionState.AccountProgress progress =
+                    collectionState.accounts.computeIfAbsent(
+                            key, ignored -> new CollectionState.AccountProgress());
+            progress.platform = localTimeline
+                    ? "mastodon-local"
+                    : platform.externalName();
+            progress.account = accountArgument;
+            progress.lastAttemptAt = now;
+            progress.lastFailureAt = now;
+            progress.failureMessage = message;
+            progress.failureKind = permanentFailure(message)
+                    ? "permanent"
+                    : "transient";
+            progress.consecutiveFailures++;
+            progress.updatedAt = now;
+            store.saveCollectionState(collectionState);
+        }
+    }
+
+    private static boolean permanentFailure(String message) {
+        String normalized = message.toLowerCase(java.util.Locale.ROOT);
+        return normalized.contains("response 404") ||
+                normalized.contains("response 410") ||
+                normalized.contains("account not found") ||
+                normalized.contains("actor not found") ||
+                normalized.contains("profile not found");
+    }
+
     private CollectionJob createJob(
             String key,
             String accountArgument,
             ArchivePlatform platform,
             boolean localTimeline,
-            CollectionState.AccountProgress previous,
-            CollectionState collectionState) throws IOException {
+            CollectionState.AccountProgress previous) throws IOException {
         var job = new CollectionJob();
         job.key = key;
         job.platform = platform.externalName();
@@ -140,127 +176,41 @@ final class CollectionJobRunner {
                 ? AtProtocolClient.PUBLIC_APPVIEW
                 : options.service();
         job.startedAt = Instant.now().toString();
-        ensurePostsStream(collectionState);
-        CollectionWarcStream.POSTS.copyToJob(collectionState, job);
         store.saveJob(job);
         store.log("START " + job.platform + " " + accountArgument +
-                " " + job.posts.openWarc());
+                " shared-collection-warc");
         return job;
-    }
-
-    private void ensurePostsStream(CollectionState state)
-            throws IOException {
-        if (state.posts.openWarc() != null) {
-            return;
-        }
-        String timestamp = DateTimeFormatter
-                .ofPattern("yyyyMMdd'T'HHmmss'Z'")
-                .withZone(ZoneOffset.UTC)
-                .format(Instant.now());
-        String basename = "warcana-posts-" + timestamp + "-" +
-                UUID.randomUUID().toString().substring(0, 8) + ".warc.gz";
-        state.posts.setPaths(
-                "warcs/" + basename + ".open",
-                "warcs/" + basename);
-        state.posts.setCommittedOffset(0);
-        store.saveCollectionState(state);
     }
 
     private void resumeJob(
             String accountArgument,
-            CollectionJob job,
-            CollectionState collectionState) throws IOException {
-        if (collectionState.posts.openWarc() == null) {
-            CollectionWarcStream.POSTS.copyToState(job, collectionState);
-            store.saveCollectionState(collectionState);
-        } else if (!collectionState.posts.openWarc().equals(
-                job.posts.openWarc())) {
-            throw new IOException(
-                    "Another interrupted account owns the shared WARC: " +
-                            collectionState.posts.openWarc());
-        }
+            CollectionJob job) throws IOException {
         progress.report(
-                "Resuming " + accountArgument + " at WARC offset " +
-                        job.posts.committedOffset());
+                "Resuming " + accountArgument + " at cursor " + job.cursor);
         store.log("RESUME " + job.platform + " " + accountArgument +
-                " offset=" + job.posts.committedOffset());
+                " cursor=" + job.cursor);
     }
 
     private void runJob(
             String accountArgument,
             ArchivePlatform platform,
-            String platformName,
-            CollectionJob job,
-            CollectionState collectionState,
-            boolean resumed) throws IOException {
-        Function<String, Warcinfo> warcinfoFactory =
-                warcinfoFactory(job, platformName, accountArgument);
-        try (var writer = new RollingCollectionWarcWriter(
-                store,
-                collectionState,
-                job,
-                CollectionWarcStream.POSTS,
-                warcinfoFactory,
-                progress)) {
-            if (!resumed) {
-                writer.write(warcinfoFactory.apply(
-                        Path.of(job.posts.finalWarc())
-                                .getFileName().toString()));
-                job.posts.setCommittedOffset(writer.position());
-                store.saveJob(job);
-            }
+            CollectionJob job) throws IOException {
+        try (var writer = runWriters.lease(CollectionWarcStream.POSTS)) {
             runArchiver(
-                    accountArgument, platform, job, collectionState,
-                    writer, warcinfoFactory);
+                    accountArgument, platform, job, writer);
             job.posts.setCommittedOffset(writer.position());
             store.saveJob(job);
         }
-    }
-
-    private Function<String, Warcinfo> warcinfoFactory(
-            CollectionJob job,
-            String platformName,
-            String accountArgument) {
-        return filename -> {
-            Map<String, List<String>> metadata =
-                    ArchiveCommand.archiveMetadata(
-                            job.userAgent,
-                            platformName,
-                            accountArgument,
-                            job.includeMedia,
-                            job.includeVideo,
-                            job.allVideoVariants,
-                            job.maxMediaBytes,
-                            job.maxTotalMediaBytes);
-            metadata.put("collection", List.of(store.root().toString()));
-            if (job.localTimeline) {
-                metadata.remove("account");
-                metadata.put("scope", List.of("local-public-timeline"));
-                metadata.put("server", List.of(
-                        MastodonServerReference.parse(accountArgument).server()));
-            }
-            metadata.put(
-                    "incremental-stop-identity",
-                    List.of(job.stopIdentity == null
-                            ? ""
-                            : job.stopIdentity));
-            return new Warcinfo.Builder()
-                    .filename(filename)
-                    .fields(metadata)
-                    .build();
-        };
     }
 
     private void runArchiver(
             String accountArgument,
             ArchivePlatform platform,
             CollectionJob job,
-            CollectionState collectionState,
-            RollingCollectionWarcWriter writer,
-            Function<String, Warcinfo> warcinfoFactory)
+            org.netpreserve.jwarc.WarcWriter writer)
             throws IOException {
         SplitCheckpointingMediaSink mediaSink = job.includeMedia
-                ? mediaSink(job, collectionState, warcinfoFactory)
+                ? mediaSink(job)
                 : null;
         try (mediaSink) {
             drainPending(job, mediaSink);
@@ -308,7 +258,7 @@ final class CollectionJobRunner {
             String accountArgument,
             CollectionJob job,
             SplitCheckpointingMediaSink mediaSink,
-            RollingCollectionWarcWriter writer,
+            org.netpreserve.jwarc.WarcWriter writer,
             ArchiveRunOptions runOptions,
             ArchiveCheckpoint checkpoint) throws IOException {
         MastodonAccountReference reference =
@@ -328,7 +278,7 @@ final class CollectionJobRunner {
             String accountArgument,
             CollectionJob job,
             SplitCheckpointingMediaSink mediaSink,
-            RollingCollectionWarcWriter writer,
+            org.netpreserve.jwarc.WarcWriter writer,
             ArchiveRunOptions runOptions,
             ArchiveCheckpoint checkpoint) throws IOException {
         BlueskyAccountReference reference =
@@ -348,7 +298,7 @@ final class CollectionJobRunner {
             String serverArgument,
             CollectionJob job,
             SplitCheckpointingMediaSink mediaSink,
-            RollingCollectionWarcWriter writer,
+            org.netpreserve.jwarc.WarcWriter writer,
             ArchiveRunOptions runOptions,
             ArchiveCheckpoint checkpoint) throws IOException {
         MastodonServerReference reference =
@@ -359,27 +309,12 @@ final class CollectionJobRunner {
                 .archive(runOptions, checkpoint);
     }
 
-    private SplitCheckpointingMediaSink mediaSink(
-            CollectionJob job,
-            CollectionState collectionState,
-            Function<String, Warcinfo> warcinfoFactory) {
+    private SplitCheckpointingMediaSink mediaSink(CollectionJob job) {
         return new SplitCheckpointingMediaSink(
                 store,
                 job,
-                () -> new RollingCollectionWarcWriter(
-                        store,
-                        collectionState,
-                        job,
-                        CollectionWarcStream.MEDIA,
-                        warcinfoFactory,
-                        progress),
-                () -> new RollingCollectionWarcWriter(
-                        store,
-                        collectionState,
-                        job,
-                        CollectionWarcStream.VIDEO,
-                        warcinfoFactory,
-                        progress),
+                () -> runWriters.lease(CollectionWarcStream.MEDIA),
+                () -> runWriters.lease(CollectionWarcStream.VIDEO),
                 job.userAgent,
                 job.maxMediaBytes,
                 job.maxTotalMediaBytes,
@@ -400,22 +335,30 @@ final class CollectionJobRunner {
                 job.pagesFetched);
     }
 
-    private void finalizeJob(
-            CollectionState collectionState, CollectionJob job)
+    private void finalizeJob(CollectionJob job)
             throws IOException {
         var progress = new CollectionState.AccountProgress();
         progress.platform = job.localTimeline
                 ? "mastodon-local"
                 : job.platform;
         progress.account = job.account;
-        CollectionState.AccountProgress previous =
-                collectionState.accounts.get(job.key);
-        progress.latestIdentity = job.newestIdentity != null
-                ? job.newestIdentity
-                : previous == null ? null : previous.latestIdentity;
-        progress.updatedAt = Instant.now().toString();
-        collectionState.accounts.put(job.key, progress);
-        store.saveCollectionState(collectionState);
+        synchronized (collectionState) {
+            CollectionState.AccountProgress previous =
+                    collectionState.accounts.get(job.key);
+            progress.latestIdentity = job.newestIdentity != null
+                    ? job.newestIdentity
+                    : previous == null ? null : previous.latestIdentity;
+            progress.updatedAt = Instant.now().toString();
+            progress.lastAttemptAt = progress.updatedAt;
+            progress.lastSuccessAt = progress.updatedAt;
+            progress.lastFailureAt = null;
+            progress.failureMessage = null;
+            progress.failureKind = null;
+            progress.consecutiveFailures = 0;
+            progress.disabled = previous != null && previous.disabled;
+            collectionState.accounts.put(job.key, progress);
+            store.saveCollectionState(collectionState);
+        }
         store.deleteJob(job.key);
     }
 }

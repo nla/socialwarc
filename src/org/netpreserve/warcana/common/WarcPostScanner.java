@@ -8,6 +8,8 @@ import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.netpreserve.warcana.common.source.LocalWarcSource;
+import org.netpreserve.warcana.common.source.WarcSource;
 
 /**
  * Streams deduplicated common-model posts from a WARC.
@@ -24,19 +26,27 @@ public class WarcPostScanner {
     }
 
     public long scan(List<Path> inputs, PostConsumer consumer) throws IOException {
+        return scanSources(inputs.stream().map(LocalWarcSource::new).toList(),
+                consumer);
+    }
+
+    public long scanSources(
+            List<? extends WarcSource> inputs, PostConsumer consumer)
+            throws IOException {
         Set<String> seen = new HashSet<>();
         long count = 0;
 
-        for (Path input : inputs) {
+        for (WarcSource input : inputs) {
             count += scanOne(input, consumer, seen);
         }
         return count;
     }
 
     private long scanOne(
-            Path input, PostConsumer consumer, Set<String> seen) throws IOException {
+            WarcSource input, PostConsumer consumer, Set<String> seen)
+            throws IOException {
         long count = 0;
-        try (var reader = new WarcReader(input)) {
+        try (var reader = new WarcReader(input.open())) {
             while (true) {
                 var next = reader.next();
                 if (next.isEmpty()) {
@@ -60,7 +70,7 @@ public class WarcPostScanner {
                                 extracted.post(),
                                 response.target().toString(),
                                 response.id().toString(),
-                                input.getFileName().toString(),
+                                input.id(),
                                 response.position(),
                                 response.date()));
                         count++;

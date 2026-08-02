@@ -43,6 +43,8 @@ import org.netpreserve.warcana.common.ScannedPost;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.common.WarcPostScanner;
 import org.netpreserve.warcana.common.WarcResponseExtractor;
+import org.netpreserve.warcana.common.source.LocalWarcSource;
+import org.netpreserve.warcana.common.source.WarcSource;
 import org.netpreserve.warcana.common.model.Attachment;
 import org.netpreserve.warcana.common.model.Post;
 
@@ -125,6 +127,14 @@ public class WarcSearchIndex {
 
     public boolean ensureCurrent(
             List<Path> warcs, Path index, boolean rebuild,
+            ProgressReporter progress) throws IOException {
+        return ensureCurrentSources(
+                warcs.stream().map(LocalWarcSource::new).toList(),
+                index, rebuild, progress);
+    }
+
+    public boolean ensureCurrentSources(
+            List<? extends WarcSource> warcs, Path index, boolean rebuild,
             ProgressReporter progress) throws IOException {
         if (warcs.isEmpty()) {
             throw new IOException("Collection contains no completed WARC files");
@@ -423,12 +433,8 @@ public class WarcSearchIndex {
     }
 
     private void build(
-            Path warc, Path index, ProgressReporter progress) throws IOException {
-        build(List.of(warc), index, progress);
-    }
-
-    private void build(
-            List<Path> warcs, Path index, ProgressReporter progress) throws IOException {
+            List<? extends WarcSource> warcs, Path index,
+            ProgressReporter progress) throws IOException {
         try (var directory = new NIOFSDirectory(index);
              Analyzer analyzer = new StandardAnalyzer();
              var writer = new IndexWriter(
@@ -437,7 +443,7 @@ public class WarcSearchIndex {
                              .setOpenMode(IndexWriterConfig.OpenMode.CREATE)
                              .setSimilarity(new BM25Similarity()))) {
             long[] count = {0};
-            scanner.scan(warcs, scanned -> {
+            scanner.scanSources(warcs, scanned -> {
                 writer.updateDocument(
                         new Term(FIELD_ID, documentId(scanned)),
                         toDocument(scanned));
@@ -680,7 +686,8 @@ public class WarcSearchIndex {
         return options.query() != null && !options.query().isBlank();
     }
 
-    private static boolean isCurrent(List<Path> warcs, Path index) {
+    private static boolean isCurrent(
+            List<? extends WarcSource> warcs, Path index) {
         if (!Files.isDirectory(index)) {
             return false;
         }
@@ -697,28 +704,24 @@ public class WarcSearchIndex {
         }
     }
 
-    private static Map<String, String> indexMetadata(List<Path> warcs) throws IOException {
+    private static Map<String, String> indexMetadata(
+            List<? extends WarcSource> warcs) throws IOException {
         Map<String, String> metadata = new LinkedHashMap<>();
         metadata.put(META_SCHEMA, SCHEMA_VERSION);
         var sources = new StringBuilder();
         long size = 0;
-        long modified = 0;
-        for (Path warc : warcs) {
-            Path source = warc.toAbsolutePath().normalize();
-            sources.append(source)
+        for (WarcSource source : warcs) {
+            sources.append(source.id())
                     .append('\t')
-                    .append(Files.size(source))
+                    .append(source.size())
                     .append('\t')
-                    .append(Files.getLastModifiedTime(source).toMillis())
+                    .append(source.version())
                     .append('\n');
-            size += Files.size(source);
-            modified = Math.max(
-                    modified,
-                    Files.getLastModifiedTime(source).toMillis());
+            size += source.size();
         }
         metadata.put(META_SOURCE, sources.toString());
         metadata.put(META_SIZE, Long.toString(size));
-        metadata.put(META_MODIFIED, Long.toString(modified));
+        metadata.put(META_MODIFIED, "source-version");
         return metadata;
     }
 

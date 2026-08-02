@@ -20,6 +20,13 @@ public class CollectionState {
         public String account;
         public String latestIdentity;
         public String updatedAt;
+        public String lastAttemptAt;
+        public String lastSuccessAt;
+        public String lastFailureAt;
+        public String failureMessage;
+        public String failureKind;
+        public int consecutiveFailures;
+        public boolean disabled;
 
         public AccountProgress() {
         }

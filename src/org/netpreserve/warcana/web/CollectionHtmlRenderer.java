@@ -70,6 +70,7 @@ final class CollectionHtmlRenderer {
                 .append(option("", "All", query.get("platform")))
                 .append(option("mastodon", "Mastodon", query.get("platform")))
                 .append(option("bluesky", "Bluesky", query.get("platform")))
+                .append(option("twitter", "Twitter", query.get("platform")))
                 .append("</select></label>")
                 .append("<label>Sort <select name=sort>")
                 .append(option("relevance", "Relevance", selectedSort))

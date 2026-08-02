@@ -3,6 +3,7 @@ package org.netpreserve.warcana;
 import org.netpreserve.warcana.bluesky.BlueskyWarcResponseExtractor;
 import org.netpreserve.warcana.common.WarcResponseExtractor;
 import org.netpreserve.warcana.mastodon.MastodonWarcResponseExtractor;
+import org.netpreserve.warcana.twitter.TwitterWarcResponseExtractor;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -13,7 +14,8 @@ import java.util.Locale;
 public final class CliSupport {
     enum Platform {
         MASTODON,
-        BLUESKY;
+        BLUESKY,
+        TWITTER;
 
         static Platform parse(String value) {
             try {
@@ -21,7 +23,7 @@ public final class CliSupport {
             } catch (IllegalArgumentException e) {
                 throw new IllegalArgumentException(
                         "Unknown platform '" + value +
-                                "' (expected mastodon or bluesky)");
+                                "' (expected mastodon, bluesky or twitter)");
             }
         }
     }
@@ -29,7 +31,8 @@ public final class CliSupport {
     public static List<WarcResponseExtractor> responseExtractors() {
         return List.of(
                 new MastodonWarcResponseExtractor(),
-                new BlueskyWarcResponseExtractor());
+                new BlueskyWarcResponseExtractor(),
+                new TwitterWarcResponseExtractor());
     }
 
     public static Instant parseDate(String value, boolean endOfDay) {

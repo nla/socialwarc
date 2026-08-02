@@ -2,9 +2,7 @@ package org.netpreserve.warcana;
 
 import org.netpreserve.warcana.common.ProgressReporter;
 import org.netpreserve.warcana.common.collection.CollectionAccount;
-import org.netpreserve.warcana.common.collection.CollectionState;
 import org.netpreserve.warcana.common.collection.CollectionStore;
-import org.netpreserve.warcana.common.collection.CollectionWarcStream;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -13,15 +11,17 @@ import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 final class CollectionArchiveRunner {
     private final ArchiveOptions options;
     private final PrintStream out;
     private final PrintStream err;
     private final CollectionStore store;
-    private final CollectionJobRunner jobRunner;
+    private final ProgressReporter progress;
 
     CollectionArchiveRunner(
             ArchiveOptions options, PrintStream out, PrintStream err) {
@@ -29,11 +29,9 @@ final class CollectionArchiveRunner {
         this.out = out;
         this.err = err;
         this.store = new CollectionStore(options.collection());
-        ProgressReporter progress = options.quiet()
+        progress = options.quiet()
                 ? ProgressReporter.NONE
                 : err::println;
-        this.jobRunner =
-                new CollectionJobRunner(store, options, out, progress);
     }
 
     int run() throws IOException {
@@ -59,61 +57,73 @@ final class CollectionArchiveRunner {
                         "Collection is already being archived: " + store.root());
             }
             try (var lock = acquiredLock) {
-                return runLocked(orderForResume(accounts));
+                return runLocked(accounts);
             }
         }
-    }
-
-    private List<CollectionAccount> orderForResume(
-            List<CollectionAccount> accounts) {
-        var ordered = new ArrayList<>(accounts);
-        for (int i = 0; i < ordered.size(); i++) {
-            CollectionAccount candidate = ordered.get(i);
-            ArchivePlatform platform = platform(candidate);
-            String key = CollectionStore.accountKey(
-                    candidate.localTimeline()
-                            ? "mastodon-local"
-                            : platform.externalName(),
-                    candidate.account());
-            if (Files.exists(store.jobFile(key))) {
-                if (i > 0) {
-                    ordered.remove(i);
-                    ordered.add(0, candidate);
-                }
-                break;
-            }
-        }
-        return ordered;
     }
 
     private int runLocked(List<CollectionAccount> accounts)
             throws IOException {
         int succeeded = 0;
         int failed = 0;
-        for (int accountIndex = 0;
-             accountIndex < accounts.size();
-             accountIndex++) {
-            CollectionAccount configured = accounts.get(accountIndex);
-            ArchivePlatform platform = platform(configured);
-            if (isFilteredOut(configured, platform)) {
-                continue;
-            }
-            try {
-                jobRunner.run(
+        try (var writers = new CollectionRunWriters(
+                store, options, progress);
+             var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var jobRunner = new CollectionJobRunner(
+                    store, options, out, progress, writers);
+            var futures = new java.util.ArrayList<Future<AccountResult>>();
+            for (CollectionAccount configured : accounts) {
+                ArchivePlatform platform = platform(configured);
+                if (isFilteredOut(configured, platform)) {
+                    continue;
+                }
+                if (jobRunner.isDisabled(
                         configured.account(), platform,
-                        configured.localTimeline());
-                succeeded++;
-            } catch (IOException | RuntimeException e) {
-                failed++;
-                reportAccountFailure(configured.account(), platform, e);
-                break;
+                        configured.localTimeline())) {
+                    out.println("Skipping disabled target: " +
+                            configured.account());
+                    continue;
+                }
+                futures.add(executor.submit(() -> {
+                    try {
+                        jobRunner.run(
+                                configured.account(), platform,
+                                configured.localTimeline());
+                        return new AccountResult(configured, platform, null);
+                    } catch (IOException | RuntimeException e) {
+                        try {
+                            jobRunner.recordFailure(
+                                    configured.account(), platform,
+                                    configured.localTimeline(), e);
+                        } catch (IOException stateFailure) {
+                            e.addSuppressed(stateFailure);
+                        }
+                        return new AccountResult(configured, platform, e);
+                    }
+                }));
             }
-            rollPostsBetweenAccountsIfNeeded(
-                    accountIndex, accounts.size());
-        }
-        if (failed == 0) {
-            for (Path completed :
-                    finalizeOpenWarcs(store.loadCollectionState())) {
+            for (Future<AccountResult> future : futures) {
+                AccountResult result;
+                try {
+                    result = future.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    executor.shutdownNow();
+                    throw new IOException("Collection archive interrupted", e);
+                } catch (ExecutionException e) {
+                    throw new IOException(
+                            "Unable to run collection account job", e.getCause());
+                }
+                if (result.failure() == null) {
+                    succeeded++;
+                } else {
+                    failed++;
+                    reportAccountFailure(
+                            result.account().account(), result.platform(),
+                            result.failure());
+                }
+            }
+            for (Path completed : writers.finalizeWarcs()) {
                 out.println("Completed collection WARC: " + completed);
             }
         }
@@ -151,51 +161,12 @@ final class CollectionArchiveRunner {
         err.println("archive failed for " + account + ": " + message);
         store.log("FAILED " + platform.externalName() + " " +
                 account + " " + message);
-        err.println("The shared WARC remains open; rerun this command " +
-                "to resume before later accounts are archived.");
+        err.println("Other accounts continued; rerun to resume this target.");
     }
 
-    private void rollPostsBetweenAccountsIfNeeded(
-            int accountIndex, int accountCount) throws IOException {
-        CollectionState state = store.loadCollectionState();
-        if (state.posts.openWarc() != null &&
-                state.posts.committedOffset() >=
-                        RollingCollectionWarcWriter.MAX_WARC_BYTES &&
-                accountIndex + 1 < accountCount) {
-            Path rolled = finalizeOpenWarc(
-                    state, CollectionWarcStream.POSTS);
-            out.println(
-                    "Closed collection WARC at size limit: " + rolled);
-        }
+    private record AccountResult(
+            CollectionAccount account,
+            ArchivePlatform platform,
+            Throwable failure) {
     }
-
-    private List<Path> finalizeOpenWarcs(CollectionState state)
-            throws IOException {
-        var completed = new ArrayList<Path>();
-        for (var stream : CollectionWarcStream.values()) {
-            if (stream.from(state).openWarc() != null) {
-                completed.add(finalizeOpenWarc(state, stream));
-            }
-        }
-        return List.copyOf(completed);
-    }
-
-    private Path finalizeOpenWarc(
-            CollectionState state,
-            CollectionWarcStream stream)
-            throws IOException {
-        var streamState = stream.from(state);
-        Path open = store.root().resolve(streamState.openWarc());
-        Path completed = store.root().resolve(streamState.finalWarc());
-        if (!Files.exists(open)) {
-            throw new IOException(
-                    "Open collection WARC does not exist: " + open);
-        }
-        RollingCollectionWarcWriter.moveCompleted(open, completed);
-        streamState.clear();
-        store.saveCollectionState(state);
-        store.log("WARC-COMPLETE " + completed.getFileName());
-        return completed;
-    }
-
 }

@@ -1,6 +1,7 @@
 package org.netpreserve.warcana.web;
 
 import org.jsoup.nodes.Entities;
+import org.netpreserve.warcana.common.collection.CollectionState;
 
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -15,7 +16,8 @@ final class ManagementHtmlRenderer {
 
     static String page(
             String accounts, ArchiveController.Status status, String csrf,
-            int warcs, int activeJobs, String message) {
+            int warcs, int activeJobs, CollectionState collectionState,
+            String message) {
         var html = new StringBuilder("<!doctype html><html lang=en><head>")
                 .append("<meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">")
                 .append("<title>Manage collection · Warcana</title>")
@@ -35,7 +37,10 @@ final class ManagementHtmlRenderer {
                 .append(metric("Configured targets", configuredCount(accounts)))
                 .append(metric("Completed WARCs", warcs))
                 .append(metric("Resumable jobs", activeJobs))
-                .append("</section><div class=manage-grid><section class=panel><h2>Accounts</h2>")
+                .append("</section>")
+                .append(accountFailures(collectionState, csrf))
+                .append(bambooStatus(status))
+                .append("<div class=manage-grid><section class=panel><h2>Accounts</h2>")
                 .append("<p class=hint>One target per line. Prefix ambiguous handles with <code>mastodon</code> or <code>bluesky</code>.</p>")
                 .append("<form method=post action=/manage/accounts>")
                 .append(token(csrf)).append("<label class=sr-only for=accounts>accounts.txt</label>")
@@ -102,6 +107,85 @@ final class ManagementHtmlRenderer {
 
     private static String metric(String label, int value) {
         return "<div><strong>" + value + "</strong><span>" + label + "</span></div>";
+    }
+
+    private static String accountFailures(
+            CollectionState state, String csrf) {
+        var failed = state.accounts.entrySet().stream()
+                .filter(entry -> entry.getValue().failureMessage != null ||
+                        entry.getValue().disabled)
+                .toList();
+        if (failed.isEmpty()) {
+            return "";
+        }
+        var html = new StringBuilder(
+                "<section class=panel-log><header><h2>Targets needing attention</h2>" +
+                        "</header><div class=account-failures>");
+        for (var entry : failed) {
+            var account = entry.getValue();
+            html.append("<article><h3>")
+                    .append(escape(account.account))
+                    .append("</h3><p>");
+            if (account.disabled) {
+                html.append("Disabled. ");
+            }
+            if (account.failureMessage != null) {
+                html.append(escape(account.failureKind == null
+                                ? "Failure"
+                                : account.failureKind + " failure"))
+                        .append(" after ")
+                        .append(account.consecutiveFailures)
+                        .append(" attempt(s): ")
+                        .append(escape(account.failureMessage));
+            }
+            html.append("</p><form method=post action=/manage/account>")
+                    .append(token(csrf))
+                    .append("<input type=hidden name=key value=")
+                    .append(entry.getKey()).append('>');
+            if (account.disabled) {
+                html.append("<button name=action value=enable>Enable</button>");
+            } else {
+                html.append("<button name=action value=disable>Disable</button>");
+            }
+            if (account.failureMessage != null) {
+                html.append("<button name=action value=clear>Clear and retry</button>");
+            }
+            html.append("</form></article>");
+        }
+        return html.append("</div></section>").toString();
+    }
+
+    private static String bambooStatus(ArchiveController.Status status) {
+        if (!status.bambooEnabled()) {
+            return "";
+        }
+        var html = new StringBuilder(
+                "<section class=panel-log><header><h2>Bamboo ingest</h2>" +
+                        "</header><div class=account-failures>");
+        if (status.bambooBatches().isEmpty()) {
+            html.append("<p>All queued WARC files have been ingested.</p>");
+        }
+        for (var batch : status.bambooBatches()) {
+            html.append("<article><h3>")
+                    .append(escape(batch.id()))
+                    .append("</h3><p>")
+                    .append(escape(batch.status()))
+                    .append(": ").append(batch.uploaded()).append(" of ")
+                    .append(batch.total()).append(" WARC files uploaded");
+            if (batch.attempts() > 0) {
+                html.append(" after ").append(batch.attempts())
+                        .append(" failed attempt(s)");
+            }
+            if (batch.lastError() != null) {
+                html.append(". ").append(escape(batch.lastError()));
+            }
+            if (batch.nextAttemptAt() != null) {
+                html.append(". Next retry: ")
+                        .append(escape(batch.nextAttemptAt()));
+            }
+            html.append(".</p></article>");
+        }
+        return html.append("</div></section>").toString();
     }
 
     private static int configuredCount(String accounts) {

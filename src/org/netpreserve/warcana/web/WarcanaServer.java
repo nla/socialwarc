@@ -17,6 +17,10 @@ import org.netpreserve.warcana.common.search.SearchHit;
 import org.netpreserve.warcana.common.search.SearchOptions;
 import org.netpreserve.warcana.common.search.SearchResults;
 import org.netpreserve.warcana.common.search.SearchSort;
+import org.netpreserve.warcana.bamboo.BambooConfiguration;
+import org.netpreserve.warcana.bamboo.BambooCatalog;
+import org.netpreserve.warcana.common.source.LocalWarcSource;
+import org.netpreserve.warcana.common.source.WarcSource;
 import org.netpreserve.warcana.common.search.SearchTimeline;
 import org.netpreserve.warcana.common.search.WarcSearchIndex;
 import tools.jackson.databind.JsonNode;
@@ -36,6 +40,8 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
@@ -60,31 +66,77 @@ public final class WarcanaServer implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService executor;
     private final ArchiveController archiveController;
+    private final OidcConfiguration oidcConfiguration;
+    private final OidcAuthenticator oidcAuthenticator;
+    private final List<WarcSource> remoteSources;
+    private volatile List<WarcSource> postSources;
+    private volatile List<WarcSource> resourceSources;
+    private volatile Map<String, WarcSource> sourcesById;
     private final String csrfToken = UUID.randomUUID().toString();
 
     public WarcanaServer(
             Path collection, InetSocketAddress address,
             boolean rebuild, ProgressReporter progress) throws IOException {
+        this(collection, address, rebuild, progress, null, null);
+    }
+
+    public WarcanaServer(
+            Path collection, InetSocketAddress address,
+            boolean rebuild, ProgressReporter progress,
+            OidcConfiguration oidcConfiguration,
+            BambooConfiguration bambooConfiguration) throws IOException {
         store = new CollectionStore(collection);
         if (!store.isCollection()) {
             throw new IOException("Not a Warcana collection: " + collection);
         }
         searchIndex = new WarcSearchIndex(CliSupport.responseExtractors());
         resourceIndex = new WarcResourceIndex();
-        List<Path> postWarcs = store.completedPostWarcs();
-        if (!postWarcs.isEmpty()) {
-            searchIndex.ensureCurrent(
-                    postWarcs, store.indexDirectory(), rebuild, progress);
-            resourceIndex.ensureCurrent(
-                    store.completedResourceWarcs(),
-                    store.resourceIndexDirectory(), rebuild, progress);
+        if (bambooConfiguration != null &&
+                !bambooConfiguration.indexSeriesIds().isEmpty()) {
+            remoteSources = new BambooCatalog(bambooConfiguration).sources();
+        } else {
+            remoteSources = List.of();
         }
-        archiveController = new ArchiveController(store);
+        refreshSources();
+        if (!postSources.isEmpty()) {
+            searchIndex.ensureCurrentSources(
+                    postSources, store.indexDirectory(), rebuild, progress);
+            resourceIndex.ensureCurrentSources(
+                    resourceSources, store.resourceIndexDirectory(),
+                    rebuild, progress);
+        }
+        archiveController = new ArchiveController(store, bambooConfiguration);
+        this.oidcConfiguration = oidcConfiguration;
+        oidcAuthenticator = oidcConfiguration == null
+                ? null
+                : new OidcAuthenticator(oidcConfiguration);
 
         server = HttpServer.create(address, 0);
         executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
         server.createContext("/", this::handle);
+    }
+
+    private synchronized void refreshSources() throws IOException {
+        var posts = new ArrayList<WarcSource>();
+        posts.addAll(store.completedPostWarcs().stream()
+                .map(LocalWarcSource::new).toList());
+        posts.addAll(remoteSources);
+        var resources = new ArrayList<WarcSource>();
+        resources.addAll(store.completedResourceWarcs().stream()
+                .map(LocalWarcSource::new).toList());
+        resources.addAll(remoteSources);
+        postSources = List.copyOf(posts);
+        resourceSources = List.copyOf(resources);
+        var sourceMap = new HashMap<String, WarcSource>();
+        for (WarcSource source : resourceSources) {
+            WarcSource previous = sourceMap.put(source.id(), source);
+            if (previous != null) {
+                throw new IOException("Duplicate WARC source ID: " +
+                        source.id());
+            }
+        }
+        sourcesById = Map.copyOf(sourceMap);
     }
 
     public void start() {
@@ -121,6 +173,10 @@ public final class WarcanaServer implements AutoCloseable {
                 postJson(exchange);
             } else if (path.startsWith("/media/")) {
                 media(exchange, path.substring("/media/".length()));
+            } else if ("/oidc/callback".equals(path)) {
+                oidcCallback(exchange);
+            } else if ("/oidc/logout".equals(path)) {
+                oidcLogout(exchange);
             } else if ("/manage".equals(path)) {
                 managePage(exchange);
             } else if ("/manage/accounts".equals(path)) {
@@ -131,6 +187,8 @@ public final class WarcanaServer implements AutoCloseable {
                 stopArchive(exchange);
             } else if ("/manage/schedule".equals(path)) {
                 saveSchedule(exchange);
+            } else if ("/manage/account".equals(path)) {
+                updateAccountState(exchange);
             } else {
                 error(exchange, 404, "Not found");
             }
@@ -151,22 +209,24 @@ public final class WarcanaServer implements AutoCloseable {
 
     private void searchPage(HttpExchange exchange) throws IOException {
         requireGet(exchange);
-        List<Path> postWarcs = store.completedPostWarcs();
-        if (postWarcs.isEmpty()) {
+        refreshSources();
+        if (postSources.isEmpty()) {
             html(exchange, 200, CollectionHtmlRenderer.empty());
             return;
         }
-        searchIndex.ensureCurrent(
-                postWarcs, store.indexDirectory(), false, ProgressReporter.NONE);
-        resourceIndex.ensureCurrent(
-                store.completedResourceWarcs(), store.resourceIndexDirectory(),
-                false, ProgressReporter.NONE);
+        searchIndex.ensureCurrentSources(
+                postSources, store.indexDirectory(), false,
+                ProgressReporter.NONE);
+        resourceIndex.ensureCurrentSources(
+                resourceSources, store.resourceIndexDirectory(), false,
+                ProgressReporter.NONE);
         Map<String, String> query = queryParameters(exchange.getRequestURI());
         String text = query.getOrDefault("q", "");
         String platform = blankToNull(query.get("platform"));
         if (platform != null &&
                 !"mastodon".equals(platform) &&
-                !"bluesky".equals(platform)) {
+                !"bluesky".equals(platform) &&
+                !"twitter".equals(platform)) {
             throw new IllegalArgumentException("Unknown platform");
         }
         String author = blankToNull(query.get("author"));
@@ -210,17 +270,18 @@ public final class WarcanaServer implements AutoCloseable {
     }
 
     private void managePage(HttpExchange exchange) throws IOException {
-        requireLocalManagement(exchange);
+        requireManagement(exchange);
         requireGet(exchange);
         html(exchange, 200, ManagementHtmlRenderer.page(
                 Files.readString(store.accountsFile(), StandardCharsets.UTF_8),
                 archiveController.status(), csrfToken,
                 store.completedWarcs().size(), store.activeJobFiles().size(),
+                store.loadCollectionState(),
                 queryParameters(exchange.getRequestURI()).get("message")));
     }
 
     private void saveAccounts(HttpExchange exchange) throws IOException {
-        requireLocalManagement(exchange);
+        requireManagement(exchange);
         Map<String, String> form = form(exchange);
         requireCsrf(form);
         store.writeAccounts(form.getOrDefault("accounts", ""));
@@ -228,7 +289,7 @@ public final class WarcanaServer implements AutoCloseable {
     }
 
     private void startArchive(HttpExchange exchange) throws IOException {
-        requireLocalManagement(exchange);
+        requireManagement(exchange);
         Map<String, String> form = form(exchange);
         requireCsrf(form);
         boolean started = archiveController.start();
@@ -237,7 +298,7 @@ public final class WarcanaServer implements AutoCloseable {
     }
 
     private void stopArchive(HttpExchange exchange) throws IOException {
-        requireLocalManagement(exchange);
+        requireManagement(exchange);
         Map<String, String> form = form(exchange);
         requireCsrf(form);
         boolean stopped = archiveController.stop();
@@ -246,7 +307,7 @@ public final class WarcanaServer implements AutoCloseable {
     }
 
     private void saveSchedule(HttpExchange exchange) throws IOException {
-        requireLocalManagement(exchange);
+        requireManagement(exchange);
         Map<String, String> form = form(exchange);
         requireCsrf(form);
         int interval = parseInt(form.get("intervalHours"), 24);
@@ -255,6 +316,42 @@ public final class WarcanaServer implements AutoCloseable {
                 "true".equals(form.get("includeMedia")),
                 "true".equals(form.get("includeVideo"))));
         redirect(exchange, "/manage?message=Schedule+saved");
+    }
+
+    private void updateAccountState(HttpExchange exchange) throws IOException {
+        requireManagement(exchange);
+        Map<String, String> form = form(exchange);
+        requireCsrf(form);
+        if (archiveController.status().running()) {
+            error(exchange, 409,
+                    "Account state cannot be changed during a capture");
+            return;
+        }
+        String key = required(form, "key");
+        if (!key.matches("[0-9a-f]{20}")) {
+            throw new IllegalArgumentException("Invalid account key");
+        }
+        String action = required(form, "action");
+        var state = store.loadCollectionState();
+        var account = state.accounts.get(key);
+        if (account == null) {
+            throw new IllegalArgumentException("Unknown account");
+        }
+        switch (action) {
+            case "disable" -> account.disabled = true;
+            case "enable" -> account.disabled = false;
+            case "clear" -> {
+                account.failureMessage = null;
+                account.failureKind = null;
+                account.consecutiveFailures = 0;
+                account.disabled = false;
+            }
+            default -> throw new IllegalArgumentException(
+                    "Unknown account action");
+        }
+        account.updatedAt = Instant.now().toString();
+        store.saveCollectionState(state);
+        redirect(exchange, "/manage?message=Account+state+updated");
     }
 
     private Map<String, String> form(HttpExchange exchange) throws IOException {
@@ -282,13 +379,77 @@ public final class WarcanaServer implements AutoCloseable {
         }
     }
 
-    private static void requireLocalManagement(HttpExchange exchange)
+    private void requireManagement(HttpExchange exchange)
             throws IOException {
+        if (oidcAuthenticator != null) {
+            if (oidcAuthenticator.session(sessionCookie(exchange)) != null) {
+                return;
+            }
+            URI login = oidcAuthenticator.begin(
+                    exchange.getRequestURI().toString()).location();
+            redirect(exchange, login.toString());
+            throw new ResponseSentException();
+        }
         if (!exchange.getRemoteAddress().getAddress().isLoopbackAddress()) {
             error(exchange, 403,
                     "Collection management is available only from this computer");
             throw new ResponseSentException();
         }
+    }
+
+    private void oidcCallback(HttpExchange exchange) throws IOException {
+        requireGet(exchange);
+        if (oidcAuthenticator == null) {
+            error(exchange, 404, "OIDC is not configured");
+            return;
+        }
+        try {
+            OidcAuthenticator.Callback callback =
+                    oidcAuthenticator.complete(exchange.getRequestURI());
+            long maxAge = Math.max(0, java.time.Duration.between(
+                    Instant.now(), callback.session().expiresAt()).toSeconds());
+            String cookie = "warcana_session=" + callback.session().id() +
+                    "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" + maxAge +
+                    ("https".equalsIgnoreCase(
+                            oidcConfiguration.publicUrl().getScheme())
+                            ? "; Secure"
+                            : "");
+            exchange.getResponseHeaders().add("Set-Cookie", cookie);
+            redirect(exchange, callback.returnTo());
+        } catch (OidcAuthenticator.ForbiddenException e) {
+            error(exchange, 403, e.getMessage());
+        } catch (IOException e) {
+            error(exchange, 401, e.getMessage());
+        }
+    }
+
+    private void oidcLogout(HttpExchange exchange) throws IOException {
+        requireGet(exchange);
+        if (oidcAuthenticator != null) {
+            oidcAuthenticator.logout(sessionCookie(exchange));
+        }
+        exchange.getResponseHeaders().add(
+                "Set-Cookie",
+                "warcana_session=; Path=/; HttpOnly; SameSite=Lax; " +
+                        "Max-Age=0");
+        redirect(exchange, "/");
+    }
+
+    private static String sessionCookie(HttpExchange exchange) {
+        List<String> headers = exchange.getRequestHeaders().get("Cookie");
+        if (headers == null) {
+            return null;
+        }
+        for (String header : headers) {
+            for (String part : header.split(";")) {
+                String[] pair = part.strip().split("=", 2);
+                if (pair.length == 2 &&
+                        "warcana_session".equals(pair[0])) {
+                    return pair[1];
+                }
+            }
+        }
+        return null;
     }
 
     private static void redirect(HttpExchange exchange, String location)
@@ -353,12 +514,12 @@ public final class WarcanaServer implements AutoCloseable {
     private JsonNode originalJson(
             SearchHit hit, String targetUrl, boolean quoted)
             throws IOException {
-        Path warc = store.warcsDirectory().resolve(hit.sourceWarc()).normalize();
-        if (!warc.startsWith(store.warcsDirectory()) ||
-                !Files.isRegularFile(warc)) {
+        refreshSources();
+        WarcSource warc = sourcesById.get(hit.sourceWarc());
+        if (warc == null) {
             throw new IOException("Source WARC not found");
         }
-        try (var reader = new WarcReader(warc)) {
+        try (var reader = new WarcReader(warc.open())) {
             reader.position(hit.warcOffset());
             var next = reader.next();
             if (next.isEmpty() ||
@@ -472,6 +633,7 @@ public final class WarcanaServer implements AutoCloseable {
     }
 
     private void media(HttpExchange exchange, String id) throws IOException {
+        refreshSources();
         String method = exchange.getRequestMethod();
         if (!"GET".equals(method) && !"HEAD".equals(method)) {
             methodNotAllowed(exchange, "GET, HEAD");
@@ -483,16 +645,13 @@ public final class WarcanaServer implements AutoCloseable {
             error(exchange, 404, "Archived resource not found");
             return;
         }
-        Path warc = store.warcsDirectory()
-                .resolve(resource.warcFilename())
-                .normalize();
-        if (!warc.startsWith(store.warcsDirectory()) ||
-                !Files.isRegularFile(warc)) {
+        WarcSource warc = sourcesById.get(resource.warcSourceId());
+        if (warc == null) {
             error(exchange, 404, "Archived resource WARC not found");
             return;
         }
 
-        try (var reader = new WarcReader(warc)) {
+        try (var reader = new WarcReader(warc.open())) {
             reader.position(resource.warcOffset());
             var next = reader.next();
             if (next.isEmpty() ||

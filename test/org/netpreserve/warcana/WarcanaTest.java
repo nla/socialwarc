@@ -380,6 +380,72 @@ class WarcanaTest {
     }
 
     @Test
+    void extractsLegacyTwitterTimelineWarcs() throws Exception {
+        var warc = Files.createTempFile("warcana-twitter-input-", ".warc");
+        var jsonOutput = Files.createTempFile("warcana-twitter-output-", ".json");
+        Files.delete(jsonOutput);
+        String timeline = """
+                {
+                  "globalObjects": {
+                    "users": {
+                      "42": {
+                        "id": 42,
+                        "name": "Alice Example",
+                        "screen_name": "alice",
+                        "profile_image_url_https": "https://pbs.twimg.com/alice.jpg"
+                      }
+                    },
+                    "tweets": {
+                      "100": {
+                        "created_at": "Mon Aug 01 12:00:00 +0000 2022",
+                        "id": 100,
+                        "id_str": "100",
+                        "full_text": "A preserved tweet",
+                        "user_id_str": "42",
+                        "entities": {"user_mentions": [], "hashtags": [], "urls": []},
+                        "reply_count": 1,
+                        "retweet_count": 2,
+                        "quote_count": 3,
+                        "favorite_count": 4
+                      }
+                    }
+                  }
+                }
+                """;
+        try (var writer = new WarcWriter(warc)) {
+            var http = new HttpResponse.Builder(200, "OK")
+                    .body(MediaType.JSON,
+                            timeline.getBytes(StandardCharsets.UTF_8))
+                    .build();
+            writer.write(new WarcResponse.Builder(
+                    "https://api.twitter.com/2/timeline/profile/42.json" +
+                            "?include_profile_interstitial_type=1&" +
+                            "tweet_mode=extended&adaptive.json=1")
+                    .body(http)
+                    .build());
+        }
+
+        var stdout = new ByteArrayOutputStream();
+        var stderr = new ByteArrayOutputStream();
+        int result = Warcana.run(new String[]{
+                        "extract", "--pretty",
+                        "--output", jsonOutput.toString(), warc.toString()
+                }, new PrintStream(stdout), new PrintStream(stderr));
+
+        assertEquals(0, result, stderr.toString(StandardCharsets.UTF_8));
+        var json = SocialJson.mapper.readTree(jsonOutput);
+        assertEquals(1, json.get("totalHits").asInt());
+        var post = json.get("posts").get(0);
+        assertEquals("https://twitter.com/alice/status/100",
+                post.get("url").asText());
+        assertEquals("alice", post.get("author").get("username").asText());
+        assertEquals("A preserved tweet", post.get("content").asText());
+
+        Files.delete(warc);
+        Files.delete(jsonOutput);
+    }
+
+    @Test
     void genericExtractReadsMixedPlatformWarcInOnePass() throws Exception {
         var warc = Files.createTempFile("warcana-mixed-input-", ".warc");
         var jsonOutput = Files.createTempFile("warcana-mixed-output-", ".json");
@@ -888,7 +954,7 @@ class WarcanaTest {
                     records++;
                 }
             }
-            assertEquals(21, records);
+            assertEquals(19, records);
 
             stdout.reset();
             stderr.reset();

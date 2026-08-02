@@ -15,6 +15,8 @@ import org.apache.lucene.store.NIOFSDirectory;
 import org.netpreserve.jwarc.WarcReader;
 import org.netpreserve.jwarc.WarcResponse;
 import org.netpreserve.warcana.common.ProgressReporter;
+import org.netpreserve.warcana.common.source.LocalWarcSource;
+import org.netpreserve.warcana.common.source.WarcSource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -49,6 +51,14 @@ public class WarcResourceIndex {
 
     public boolean ensureCurrent(
             List<Path> warcs, Path index, boolean rebuild,
+            ProgressReporter progress) throws IOException {
+        return ensureCurrentSources(
+                warcs.stream().map(LocalWarcSource::new).toList(),
+                index, rebuild, progress);
+    }
+
+    public boolean ensureCurrentSources(
+            List<? extends WarcSource> warcs, Path index, boolean rebuild,
             ProgressReporter progress) throws IOException {
         if (!rebuild && isCurrent(warcs, index)) {
             progress.report("Using resource index: " + index.toAbsolutePath());
@@ -148,7 +158,8 @@ public class WarcResourceIndex {
     }
 
     private static void build(
-            List<Path> warcs, Path index, ProgressReporter progress)
+            List<? extends WarcSource> warcs, Path index,
+            ProgressReporter progress)
             throws IOException {
         try (var directory = new NIOFSDirectory(index);
              var analyzer = new StandardAnalyzer();
@@ -158,12 +169,12 @@ public class WarcResourceIndex {
                              .setOpenMode(IndexWriterConfig.OpenMode.CREATE))) {
             Set<String> seen = new HashSet<>();
             long count = 0;
-            for (Path warc : warcs) {
-                String filename = warc.getFileName().toString();
+            for (WarcSource warc : warcs) {
+                String filename = warc.filename();
                 boolean resourceWarc =
                         filename.startsWith("warcana-media-") ||
                                 filename.startsWith("warcana-video-");
-                try (var reader = new WarcReader(warc)) {
+                try (var reader = new WarcReader(warc.open())) {
                     while (true) {
                         var next = reader.next();
                         if (next.isEmpty()) {
@@ -193,7 +204,7 @@ public class WarcResourceIndex {
                                 FIELD_ID, id, Field.Store.YES));
                         document.add(new StoredField(FIELD_URL, url));
                         document.add(new StoredField(
-                                FIELD_WARC, warc.getFileName().toString()));
+                                FIELD_WARC, warc.id()));
                         document.add(new StoredField(
                                 FIELD_OFFSET, response.position()));
                         document.add(new StoredField(
@@ -231,7 +242,8 @@ public class WarcResourceIndex {
                 normalized.startsWith("application/x-mpegurl");
     }
 
-    private static boolean isCurrent(List<Path> warcs, Path index) {
+    private static boolean isCurrent(
+            List<? extends WarcSource> warcs, Path index) {
         if (!Files.isDirectory(index)) {
             return false;
         }
@@ -248,18 +260,18 @@ public class WarcResourceIndex {
         }
     }
 
-    private static Map<String, String> metadata(List<Path> warcs)
+    private static Map<String, String> metadata(
+            List<? extends WarcSource> warcs)
             throws IOException {
         var metadata = new LinkedHashMap<String, String>();
         metadata.put(META_SCHEMA, SCHEMA_VERSION);
         var sources = new StringBuilder();
-        for (Path warc : warcs) {
-            Path source = warc.toAbsolutePath().normalize();
-            sources.append(source)
+        for (WarcSource source : warcs) {
+            sources.append(source.id())
                     .append('\t')
-                    .append(Files.size(source))
+                    .append(source.size())
                     .append('\t')
-                    .append(Files.getLastModifiedTime(source).toMillis())
+                    .append(source.version())
                     .append('\n');
         }
         metadata.put(META_SOURCES, sources.toString());

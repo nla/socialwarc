@@ -80,7 +80,7 @@ final class ExtractCommand {
     private static void usage(PrintStream stream) {
         stream.println("Usage: warcana extract [options] WARC_FILE");
         stream.println();
-        stream.println("Extracts Mastodon and Bluesky" +
+        stream.println("Extracts Mastodon, Bluesky and legacy Twitter" +
                 " posts as common-model SocialResults JSON.");
         stream.println("Writes JSON to stdout unless --output is specified.");
         stream.println();
