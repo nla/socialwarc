@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.channels.FileChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -42,6 +43,7 @@ final class RollingCollectionWarcWriter extends WarcWriter {
     private final Function<String, Warcinfo> warcinfoFactory;
     private final ProgressReporter progress;
     private WarcWriter delegate;
+    private long delegateBaseOffset;
     private boolean closed;
 
     RollingCollectionWarcWriter(
@@ -64,7 +66,7 @@ final class RollingCollectionWarcWriter extends WarcWriter {
             delegate.write(warcinfoFactory.apply(
                     Path.of(jobStream().finalWarc())
                             .getFileName().toString()));
-            setCommittedOffset(delegate.position());
+            setCommittedOffset(position());
             store.saveJob(job);
             store.saveCollectionState(state);
         }
@@ -87,7 +89,10 @@ final class RollingCollectionWarcWriter extends WarcWriter {
 
     private void createStreamPaths() {
         String basename = stream.filenamePrefix() + timestamp() + "-" +
-                UUID.randomUUID().toString().substring(0, 8) + ".warc";
+                UUID.randomUUID().toString().substring(0, 8) +
+                (stream == CollectionWarcStream.POSTS
+                        ? ".warc.gz"
+                        : ".warc");
         WarcStreamState created = jobStream();
         created.setPaths(
                 "warcs/" + basename + ".open",
@@ -112,14 +117,24 @@ final class RollingCollectionWarcWriter extends WarcWriter {
         }
         channel.truncate(checkpoint.committedOffset());
         channel.position(checkpoint.committedOffset());
-        delegate = new WarcWriter(channel, WarcCompression.NONE);
+        WarcCompression compression = checkpoint.finalWarc().endsWith(".gz")
+                ? WarcCompression.GZIP
+                : WarcCompression.NONE;
+        if (compression == WarcCompression.GZIP) {
+            delegateBaseOffset = checkpoint.committedOffset();
+            delegate = new WarcWriter(
+                    new RelativeWritableChannel(channel), compression);
+        } else {
+            delegateBaseOffset = 0;
+            delegate = new WarcWriter(channel, compression);
+        }
     }
 
     private void rollIfNeeded() throws IOException {
-        if (delegate.position() < MAX_WARC_BYTES) {
+        if (position() < MAX_WARC_BYTES) {
             return;
         }
-        setCommittedOffset(delegate.position());
+        setCommittedOffset(position());
         store.saveJob(job);
         store.saveCollectionState(state);
         delegate.close();
@@ -141,7 +156,7 @@ final class RollingCollectionWarcWriter extends WarcWriter {
         delegate.write(warcinfoFactory.apply(
                 Path.of(jobStream().finalWarc())
                         .getFileName().toString()));
-        setCommittedOffset(delegate.position());
+        setCommittedOffset(position());
         store.saveJob(job);
         store.saveCollectionState(state);
     }
@@ -197,7 +212,8 @@ final class RollingCollectionWarcWriter extends WarcWriter {
 
     @Override
     public long position() {
-        return delegate == null ? 0 : delegate.position();
+        return delegate == null ? 0 :
+                delegateBaseOffset + delegate.position();
     }
 
     @Override
@@ -218,5 +234,27 @@ final class RollingCollectionWarcWriter extends WarcWriter {
     private void setCommittedOffset(long offset) {
         jobStream().setCommittedOffset(offset);
         stream.copyToState(job, state);
+    }
+
+    /**
+     * Hides the seekable channel's absolute position from WarcWriter so a
+     * reopened gzip writer reports bytes relative to this append session.
+     */
+    private record RelativeWritableChannel(WritableByteChannel delegate)
+            implements WritableByteChannel {
+        @Override
+        public int write(java.nio.ByteBuffer source) throws IOException {
+            return delegate.write(source);
+        }
+
+        @Override
+        public boolean isOpen() {
+            return delegate.isOpen();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
     }
 }

@@ -219,7 +219,11 @@ public class CollectionStore {
         try (var stream = Files.list(warcsDirectory())) {
             return stream
                     .filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().endsWith(".warc"))
+                    .filter(path -> {
+                        String name = path.getFileName().toString();
+                        return name.endsWith(".warc") ||
+                                name.endsWith(".warc.gz");
+                    })
                     .sorted(java.util.Comparator.reverseOrder())
                     .toList();
         }

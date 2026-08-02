@@ -142,7 +142,7 @@ class WarcanaServerTest {
             var store = new CollectionStore(root);
             store.initialize();
             writePostWarc(store.warcsDirectory().resolve(
-                    "warcana-posts-test.warc"));
+                    "warcana-posts-test.warc.gz"));
             writeMediaWarc(
                     store.warcsDirectory().resolve(
                             "warcana-media-test.warc"),
@@ -264,7 +264,7 @@ class WarcanaServerTest {
                     assertTrue(detailDocument.selectFirst(".edited").text()
                             .contains("edited"));
                     assertEquals(
-                            "warcana-posts-test.warc",
+                            "warcana-posts-test.warc.gz",
                             detailDocument.select(".provenance dt")
                                     .stream()
                                     .filter(element -> "WARC file".equals(

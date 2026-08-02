@@ -149,7 +149,7 @@ final class CollectionJobRunner {
                 .withZone(ZoneOffset.UTC)
                 .format(Instant.now());
         String basename = "warcana-posts-" + timestamp + "-" +
-                UUID.randomUUID().toString().substring(0, 8) + ".warc";
+                UUID.randomUUID().toString().substring(0, 8) + ".warc.gz";
         state.posts.setPaths(
                 "warcs/" + basename + ".open",
                 "warcs/" + basename);

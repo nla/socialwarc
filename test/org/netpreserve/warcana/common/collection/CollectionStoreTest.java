@@ -52,6 +52,11 @@ class CollectionStoreTest {
             var loaded = store.loadJob(job.key);
             assertEquals(1234, loaded.posts.committedOffset());
             assertEquals(job.pendingMedia, loaded.pendingMedia);
+
+            Files.write(root.resolve("warcs/legacy.warc"), new byte[]{1});
+            Files.write(root.resolve("warcs/posts.warc.gz"), new byte[]{2});
+            Files.write(root.resolve("warcs/ignored.txt"), new byte[]{3});
+            assertEquals(2, store.completedWarcs().size());
         } finally {
             try (var paths = Files.walk(root)) {
                 for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {

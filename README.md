@@ -54,7 +54,7 @@ java -jar target/warcana-0.1.0.jar archive \
 All accounts processed by one collection run share three independently
 rolling WARC streams:
 
-- `warcana-posts-*.warc` contains API requests and responses.
+- `warcana-posts-*.warc.gz` contains gzip-compressed API requests and responses.
 - `warcana-media-*.warc` contains images, previews, avatars, and other
   non-video media.
 - `warcana-video-*.warc` contains video resources, HLS playlists, and their

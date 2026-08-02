@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.netpreserve.jwarc.HttpResponse;
 import org.netpreserve.jwarc.MediaType;
 import org.netpreserve.jwarc.WarcResponse;
+import org.netpreserve.jwarc.WarcReader;
 import org.netpreserve.jwarc.WarcWriter;
 import org.netpreserve.warcana.bluesky.BlueskyAccountReference;
 import org.netpreserve.warcana.bluesky.model.PostView;
@@ -781,7 +782,8 @@ class WarcanaTest {
             Files.writeString(
                     store.accountsFile(),
                     "mastodon " + serverBase + "/@alice\n" +
-                            "mastodon " + serverBase + "/@bob\n");
+                            "mastodon " + serverBase + "/@bob\n" +
+                            "mastodon " + serverBase + "/@carol\n");
 
             var stdout = new ByteArrayOutputStream();
             var stderr = new ByteArrayOutputStream();
@@ -811,7 +813,18 @@ class WarcanaTest {
                             .startsWith("warcana-posts-"))
                     .findFirst()
                     .orElseThrow();
+            assertTrue(firstPostsWarc.getFileName().toString()
+                    .endsWith(".warc.gz"));
             byte[] firstBytes = Files.readAllBytes(firstPostsWarc);
+            assertEquals(0x1f, Byte.toUnsignedInt(firstBytes[0]));
+            assertEquals(0x8b, Byte.toUnsignedInt(firstBytes[1]));
+            int records = 0;
+            try (var reader = new WarcReader(firstPostsWarc)) {
+                while (reader.next().isPresent()) {
+                    records++;
+                }
+            }
+            assertEquals(21, records);
 
             stdout.reset();
             stderr.reset();
@@ -826,7 +839,7 @@ class WarcanaTest {
             assertTrue(java.util.Arrays.equals(
                     firstBytes,
                     Files.readAllBytes(firstPostsWarc)));
-            assertEquals(6, statusRequests.get());
+            assertEquals(9, statusRequests.get());
             try (var jobs = Files.list(store.jobsDirectory())) {
                 assertEquals(0, jobs.count());
             }
