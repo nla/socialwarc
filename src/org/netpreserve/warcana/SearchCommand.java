@@ -7,6 +7,7 @@ import org.netpreserve.warcana.common.collection.CollectionStore;
 import org.netpreserve.warcana.common.search.SearchHit;
 import org.netpreserve.warcana.common.search.SearchOptions;
 import org.netpreserve.warcana.common.search.SearchResults;
+import org.netpreserve.warcana.common.search.SearchSort;
 import org.netpreserve.warcana.common.search.WarcSearchIndex;
 
 import java.io.IOException;
@@ -31,6 +32,7 @@ final class SearchCommand {
         boolean quiet = false;
         int limit = 20;
         int offset = 0;
+        SearchSort sort = SearchSort.AUTO;
         SearchFormat format = SearchFormat.TEXT;
         ColorMode colorMode = ColorMode.AUTO;
         var queryParts = new ArrayList<String>();
@@ -61,6 +63,8 @@ final class SearchCommand {
                     case "--limit" -> limit = Integer.parseInt(
                             CliSupport.requireValue(args, ++i, args[i - 1]));
                     case "--offset" -> offset = Integer.parseInt(
+                            CliSupport.requireValue(args, ++i, args[i - 1]));
+                    case "--sort" -> sort = SearchSort.parse(
                             CliSupport.requireValue(args, ++i, args[i - 1]));
                     case "--format" -> format = SearchFormat.parse(
                             CliSupport.requireValue(args, ++i, args[i - 1]));
@@ -136,7 +140,7 @@ final class SearchCommand {
                     index,
                     new SearchOptions(
                             query, platform, author, since, until,
-                            hasMedia, limit, offset));
+                            hasMedia, sort, limit, offset));
             writeResults(results, format, out, colorMode.enabled(out));
             return 0;
         } catch (IllegalArgumentException e) {
@@ -283,6 +287,7 @@ final class SearchCommand {
         stream.println("  --since DATE       Include posts on or after DATE");
         stream.println("  --until DATE       Include posts on or before DATE");
         stream.println("  --has-media        Only include posts with attachments");
+        stream.println("  --sort ORDER       relevance, newest or oldest");
         stream.println("  --limit NUMBER     Maximum results (default: 20)");
         stream.println("  --offset NUMBER    Skip the first NUMBER results");
         stream.println("  --format FORMAT    text, json or jsonl (default: text)");

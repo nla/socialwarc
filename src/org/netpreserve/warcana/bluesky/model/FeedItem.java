@@ -37,7 +37,10 @@ public record FeedItem(
                 0L,
                 0L,
                 0L,
-                0L);
+                0L,
+                identity(),
+                null,
+                null);
     }
 
     public String identity() {

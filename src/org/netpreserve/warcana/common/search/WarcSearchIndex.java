@@ -46,6 +46,8 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -60,7 +62,7 @@ import java.util.logging.Logger;
  * Builds and queries a persistent Lucene sidecar index for a WARC.
  */
 public class WarcSearchIndex {
-    private static final String SCHEMA_VERSION = "3";
+    private static final String SCHEMA_VERSION = "10";
     private static final String META_SCHEMA = "warcana.schema";
     private static final String META_SOURCE = "warcana.source";
     private static final String META_SIZE = "warcana.source.size";
@@ -79,6 +81,12 @@ public class WarcSearchIndex {
     private static final String FIELD_IDENTITY = "identity";
     private static final String FIELD_SOURCE_TARGET = "source_target";
     private static final String FIELD_WARC_RECORD_ID = "warc_record_id";
+    private static final String FIELD_SOURCE_WARC = "source_warc";
+    private static final String FIELD_WARC_OFFSET = "warc_offset";
+    private static final String FIELD_WARC_DATE = "warc_date";
+    private static final String FIELD_NATIVE_ID = "native_id";
+    private static final String FIELD_SITE = "site";
+    private static final String FIELD_REPLY_PARENT = "reply_parent";
     private static final String FIELD_POST_JSON = "post_json";
 
     private static final FieldType HIGHLIGHTED_TEXT;
@@ -165,50 +173,228 @@ public class WarcSearchIndex {
                     reader.maxDoc(),
                     (long) options.offset() + options.limit());
 
-            boolean ranked = hasQuery(options);
+            boolean hasQuery = hasQuery(options);
+            SearchSort sort = options.sort() == SearchSort.AUTO
+                    ? hasQuery ? SearchSort.RELEVANCE : SearchSort.NEWEST
+                    : options.sort();
+            if (!hasQuery && sort == SearchSort.RELEVANCE) {
+                sort = SearchSort.NEWEST;
+            }
+            boolean ranked = sort == SearchSort.RELEVANCE;
             TopDocs topDocs;
-            String[] snippets;
             if (ranked) {
                 topDocs = searcher.search(query, requested);
-                snippets = UnifiedHighlighter
-                        .builder(searcher, analyzer)
-                        .withFormatter(new DefaultPassageFormatter(
-                                "<b>", "</b>", " … ", true))
-                        .build()
-                        .highlight(FIELD_TEXT, query, topDocs, 1);
             } else {
                 var created = new SortField(
-                        FIELD_CREATED, SortField.Type.LONG, true);
-                created.setMissingValue(Long.MIN_VALUE);
+                        FIELD_CREATED,
+                        SortField.Type.LONG,
+                        sort == SearchSort.NEWEST);
+                created.setMissingValue(sort == SearchSort.NEWEST
+                        ? Long.MIN_VALUE
+                        : Long.MAX_VALUE);
                 topDocs = searcher.search(
                         query,
                         requested,
                         new Sort(created, SortField.FIELD_DOC));
-                snippets = null;
             }
+            String[] snippets = hasQuery
+                    ? UnifiedHighlighter
+                    .builder(searcher, analyzer)
+                    .withFormatter(new DefaultPassageFormatter(
+                            "<b>", "</b>", " … ", true))
+                    .build()
+                    .highlight(FIELD_TEXT, query, topDocs, 1)
+                    : null;
             var storedFields = searcher.storedFields();
             var hits = new ArrayList<SearchHit>();
             for (int i = options.offset(); i < topDocs.scoreDocs.length; i++) {
                 ScoreDoc scoreDoc = topDocs.scoreDocs[i];
                 Document document = storedFields.document(scoreDoc.doc);
-                Post post = SocialJson.mapper.readValue(
-                        document.get(FIELD_POST_JSON), Post.class);
-                hits.add(new SearchHit(
+                hits.add(toHit(
+                        document,
                         ranked ? scoreDoc.score : null,
-                        ranked
+                        hasQuery
                                 ? snippets[i]
                                 : Entities.escape(plainSnippet(
-                                        document.get(FIELD_TEXT))),
-                        document.get(FIELD_PLATFORM),
-                        document.get(FIELD_IDENTITY),
-                        document.get(FIELD_SOURCE_TARGET),
-                        document.get(FIELD_WARC_RECORD_ID),
-                        post));
+                                        document.get(FIELD_TEXT)))));
             }
             return new SearchResults(totalHits, List.copyOf(hits));
         } catch (ParseException e) {
             throw new IllegalArgumentException("Invalid search query: " + e.getMessage(), e);
         }
+    }
+
+    public SearchHit find(Path index, String platform, String identity)
+            throws IOException {
+        try (var directory = new NIOFSDirectory(index);
+             var reader = DirectoryReader.open(directory)) {
+            var searcher = new IndexSearcher(reader);
+            TopDocs results = searcher.search(
+                    new TermQuery(new Term(
+                            FIELD_ID, platform + ":" + identity)),
+                    1);
+            if (results.scoreDocs.length == 0) {
+                return null;
+            }
+            Document document = searcher.storedFields()
+                    .document(results.scoreDocs[0].doc);
+            return toHit(
+                    document,
+                    null,
+                    Entities.escape(plainSnippet(document.get(FIELD_TEXT))));
+        }
+    }
+
+    public SearchHit findByNativeId(
+            Path index, String platform, String site, String nativeId)
+            throws IOException {
+        if (platform == null || site == null || nativeId == null) {
+            return null;
+        }
+        try (var directory = new NIOFSDirectory(index);
+             var reader = DirectoryReader.open(directory)) {
+            var searcher = new IndexSearcher(reader);
+            return findByNativeId(searcher, platform, site, nativeId);
+        }
+    }
+
+    public List<SearchHit> thread(Path index, SearchHit selected)
+            throws IOException {
+        Post selectedPost = displayedPost(selected.post());
+        if (selectedPost.id() == null ||
+                selectedPost.site() == null ||
+                selectedPost.site().name() == null) {
+            return List.of(selected);
+        }
+        String platform = selected.platform();
+        String site = selectedPost.site().name();
+        var hits = new LinkedHashMap<String, SearchHit>();
+        var pending = new ArrayDeque<SearchHit>();
+        hits.put(selectedPost.id(), selected);
+        pending.add(selected);
+
+        try (var directory = new NIOFSDirectory(index);
+             var reader = DirectoryReader.open(directory)) {
+            var searcher = new IndexSearcher(reader);
+            while (!pending.isEmpty()) {
+                SearchHit hit = pending.removeFirst();
+                Post post = displayedPost(hit.post());
+                if (post.thread() != null) {
+                    addThreadReference(
+                            searcher, platform, site,
+                            post.thread().parent(), hits, pending);
+                    addThreadReference(
+                            searcher, platform, site,
+                            post.thread().root(), hits, pending);
+                }
+                for (SearchHit reply : findReplies(
+                        searcher, platform, site, post.id())) {
+                    Post replyPost = displayedPost(reply.post());
+                    if (replyPost.id() != null &&
+                            hits.putIfAbsent(replyPost.id(), reply) == null) {
+                        pending.addLast(reply);
+                    }
+                }
+            }
+        }
+
+        return hits.values().stream()
+                .sorted(Comparator
+                        .comparing(
+                                (SearchHit hit) -> displayedPost(hit.post())
+                                        .createdAt(),
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(SearchHit::identity))
+                .toList();
+    }
+
+    private static void addThreadReference(
+            IndexSearcher searcher,
+            String platform,
+            String site,
+            Post.PostReference reference,
+            Map<String, SearchHit> hits,
+            ArrayDeque<SearchHit> pending) throws IOException {
+        if (reference == null || reference.id() == null ||
+                hits.containsKey(reference.id())) {
+            return;
+        }
+        SearchHit hit = findByNativeId(
+                searcher, platform, site, reference.id());
+        if (hit != null) {
+            hits.put(reference.id(), hit);
+            pending.addLast(hit);
+        }
+    }
+
+    private static SearchHit findByNativeId(
+            IndexSearcher searcher,
+            String platform,
+            String site,
+            String nativeId) throws IOException {
+        TopDocs results = searcher.search(scopedNativeQuery(
+                platform, site, FIELD_NATIVE_ID, nativeId), 1);
+        return results.scoreDocs.length == 0
+                ? null
+                : toHit(
+                        searcher.storedFields().document(
+                                results.scoreDocs[0].doc),
+                        null,
+                        "");
+    }
+
+    private static List<SearchHit> findReplies(
+            IndexSearcher searcher,
+            String platform,
+            String site,
+            String parentId) throws IOException {
+        if (parentId == null) {
+            return List.of();
+        }
+        TopDocs results = searcher.search(
+                scopedNativeQuery(
+                        platform, site, FIELD_REPLY_PARENT, parentId),
+                Math.max(1, searcher.getIndexReader().maxDoc()));
+        var replies = new ArrayList<SearchHit>(results.scoreDocs.length);
+        var storedFields = searcher.storedFields();
+        for (ScoreDoc scoreDoc : results.scoreDocs) {
+            replies.add(toHit(
+                    storedFields.document(scoreDoc.doc), null, ""));
+        }
+        return replies;
+    }
+
+    private static Query scopedNativeQuery(
+            String platform, String site, String field, String value) {
+        return new BooleanQuery.Builder()
+                .add(new TermQuery(new Term(
+                                FIELD_PLATFORM, normalize(platform))),
+                        BooleanClause.Occur.MUST)
+                .add(new TermQuery(new Term(
+                                FIELD_SITE, normalize(site))),
+                        BooleanClause.Occur.MUST)
+                .add(new TermQuery(new Term(field, value)),
+                        BooleanClause.Occur.MUST)
+                .build();
+    }
+
+    private static SearchHit toHit(
+            Document document, Float score, String snippet) throws IOException {
+        Post post = SocialJson.mapper.readValue(
+                document.get(FIELD_POST_JSON), Post.class);
+        return new SearchHit(
+                score,
+                snippet,
+                document.get(FIELD_PLATFORM),
+                document.get(FIELD_IDENTITY),
+                document.get(FIELD_SOURCE_TARGET),
+                document.get(FIELD_WARC_RECORD_ID),
+                document.get(FIELD_SOURCE_WARC),
+                document.getField(FIELD_WARC_OFFSET)
+                        .numericValue().longValue(),
+                Instant.ofEpochMilli(document.getField(FIELD_WARC_DATE)
+                        .numericValue().longValue()),
+                post);
     }
 
     private void build(
@@ -243,6 +429,7 @@ public class WarcSearchIndex {
 
     private static Document toDocument(ScannedPost scanned) throws IOException {
         Post post = scanned.post();
+        Post displayed = displayedPost(post);
         var document = new Document();
         String author = authorText(post);
         String mentions = post.mentions() == null
@@ -255,10 +442,32 @@ public class WarcSearchIndex {
                 FIELD_ID, documentId(scanned), Field.Store.NO));
         document.add(new StringField(
                 FIELD_PLATFORM, normalize(scanned.platform()), Field.Store.YES));
-        document.add(new TextField(FIELD_AUTHOR, author, Field.Store.NO));
-        for (String authorIdentity : authorIdentities(post, scanned.platform())) {
+        if (displayed.id() != null &&
+                displayed.site() != null &&
+                displayed.site().name() != null) {
             document.add(new StringField(
-                    FIELD_AUTHOR_EXACT, authorIdentity, Field.Store.NO));
+                    FIELD_NATIVE_ID, displayed.id(), Field.Store.NO));
+            document.add(new StringField(
+                    FIELD_SITE,
+                    normalize(displayed.site().name()),
+                    Field.Store.NO));
+            if (displayed.thread() != null &&
+                    displayed.thread().parent() != null &&
+                    displayed.thread().parent().id() != null) {
+                document.add(new StringField(
+                        FIELD_REPLY_PARENT,
+                        displayed.thread().parent().id(),
+                        Field.Store.NO));
+            }
+        }
+        document.add(new TextField(FIELD_AUTHOR, author, Field.Store.NO));
+        if (post.author() != null &&
+                post.author().username() != null &&
+                !post.author().username().isBlank()) {
+            document.add(new StringField(
+                    FIELD_AUTHOR_EXACT,
+                    normalize(post.author().username()),
+                    Field.Store.NO));
         }
         document.add(new TextField(FIELD_MENTIONS, mentions, Field.Store.NO));
         document.add(new TextField(FIELD_ALT, alt, Field.Store.NO));
@@ -279,6 +488,10 @@ public class WarcSearchIndex {
         document.add(new StoredField(FIELD_IDENTITY, scanned.identity()));
         document.add(new StoredField(FIELD_SOURCE_TARGET, scanned.sourceTarget()));
         document.add(new StoredField(FIELD_WARC_RECORD_ID, scanned.warcRecordId()));
+        document.add(new StoredField(FIELD_SOURCE_WARC, scanned.sourceWarc()));
+        document.add(new StoredField(FIELD_WARC_OFFSET, scanned.warcOffset()));
+        document.add(new StoredField(
+                FIELD_WARC_DATE, scanned.warcDate().toEpochMilli()));
         document.add(new StoredField(
                 FIELD_POST_JSON,
                 SocialJson.mapper.writeValueAsString(post)));
@@ -400,35 +613,32 @@ public class WarcSearchIndex {
                 nullToEmpty(post.author().displayName())).trim();
     }
 
-    private static List<String> authorIdentities(Post post, String platform) {
-        if (post.author() == null ||
-                post.author().username() == null ||
-                post.author().username().isBlank()) {
-            return List.of();
-        }
-        String username = normalize(post.author().username());
-        if ("mastodon".equalsIgnoreCase(platform) &&
-                post.site() != null &&
-                post.site().name() != null &&
-                !post.site().name().isBlank() &&
-                !username.contains("@")) {
-            return List.of(username, username + "@" + normalize(post.site().name()));
-        }
-        return List.of(username);
-    }
-
     private static String attachmentText(Post post) {
         var text = new StringBuilder();
         if (post.attachments() != null) {
             for (Attachment attachment : post.attachments()) {
                 append(text, attachment.altText());
+                append(text, attachment.title());
+                append(text, attachment.description());
             }
         }
         return text.toString();
     }
 
     private static boolean hasMedia(Post post) {
-        return post.attachments() != null && !post.attachments().isEmpty();
+        if (post == null) {
+            return false;
+        }
+        if (post.attachments() != null && post.attachments().stream()
+                .anyMatch(attachment -> attachment != null &&
+                        !"link".equalsIgnoreCase(attachment.type()))) {
+            return true;
+        }
+        return hasMedia(post.repost()) || hasMedia(post.quotedPost());
+    }
+
+    private static Post displayedPost(Post post) {
+        return post.repost() == null ? post : post.repost();
     }
 
     private static String plainText(String content) {

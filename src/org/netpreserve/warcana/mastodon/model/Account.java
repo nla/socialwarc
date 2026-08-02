@@ -3,6 +3,7 @@ package org.netpreserve.warcana.mastodon.model;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.netpreserve.warcana.common.model.Site;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
@@ -46,9 +47,17 @@ public record Account(
         @Nullable Boolean indexable,
         @Nullable Boolean hide_collections) {
 
-    public org.netpreserve.warcana.common.model.Account toGenericAccount() {
+    public org.netpreserve.warcana.common.model.Account toGenericAccount(
+            Site site) {
+        String handle = acct.replaceFirst("^@", "");
+        if (!handle.contains("@") &&
+                site != null &&
+                site.name() != null &&
+                !site.name().isBlank()) {
+            handle += "@" + site.name();
+        }
         return new org.netpreserve.warcana.common.model.Account(
-                username,
+                handle,
                 displayName,
                 avatar,
                 header);

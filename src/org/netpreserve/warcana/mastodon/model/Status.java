@@ -9,6 +9,7 @@ import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -77,22 +78,52 @@ public record Status(
 
     public Post toGenericPost(Site site) {
         Post repost = reblog == null ? null : reblog.toGenericPost(site);
+        var attachments = new ArrayList<>(mediaAttachments.stream()
+                .map(MediaAttachment::toGenericMediaAttachment)
+                .toList());
+        if (card != null) {
+            attachments.add(card.toGenericAttachment());
+        }
+        var replyAuthor = replyAuthor();
+        Post.ThreadContext thread = inReplyToId == null
+                ? null
+                : new Post.ThreadContext(
+                        null,
+                        new Post.PostReference(
+                                inReplyToId,
+                                null,
+                                replyAuthor));
         return new Post(
                 url,
                 createdAt,
-                account.toGenericAccount(),
+                account.toGenericAccount(site),
                 site,
-                inReplyToAccountId,
+                replyAuthor == null ? null : replyAuthor.username(),
                 mentions().stream().map(Mention::username).toList(),
                 content,
-                mediaAttachments.stream().map(MediaAttachment::toGenericMediaAttachment).toList(),
+                List.copyOf(attachments),
                 repost,
                 null,
                 repliesCount,
                 reblogsCount,
                 null,
-                favouritesCount
+                favouritesCount,
+                id,
+                editedAt,
+                thread
         );
+    }
+
+    private org.netpreserve.warcana.common.model.Account replyAuthor() {
+        if (inReplyToAccountId == null) {
+            return null;
+        }
+        return mentions.stream()
+                .filter(mention -> inReplyToAccountId.equals(mention.id()))
+                .findFirst()
+                .map(mention -> new org.netpreserve.warcana.common.model.Account(
+                        mention.acct(), null, null, null))
+                .orElse(null);
     }
 
     public List<String> mediaUrls() {

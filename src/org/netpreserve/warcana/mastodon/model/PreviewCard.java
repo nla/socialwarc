@@ -1,8 +1,10 @@
 package org.netpreserve.warcana.mastodon.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jsoup.nodes.Entities;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.netpreserve.warcana.common.model.Attachment;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
@@ -31,6 +33,21 @@ public record PreviewCard(
         @Nullable Instant publishedAt,
         @Nullable List<Author> authors
 ) {
+    public Attachment toGenericAttachment() {
+        return new Attachment(
+                url,
+                "link",
+                unescape(imageDescription),
+                List.of(),
+                unescape(title),
+                unescape(description),
+                image);
+    }
+
+    private static @Nullable String unescape(@Nullable String value) {
+        return value == null ? null : Entities.unescape(value);
+    }
+
     // https://docs.joinmastodon.org/entities/PreviewCard/#type
     public enum Type {
         @JsonProperty("link") LINK,

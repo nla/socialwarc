@@ -23,6 +23,7 @@ public class Warcana {
             case "archive" -> ArchiveCommand.run(args, out, err);
             case "extract" -> ExtractCommand.run(args, out, err);
             case "search" -> SearchCommand.run(args, out, err);
+            case "serve" -> ServeCommand.run(args, out, err);
             case "inspect" -> InspectCommand.run(args, out, err);
             case "init" -> InitCommand.run(args, out, err);
             default -> {
@@ -49,6 +50,8 @@ public class Warcana {
                 "Extract common-model JSON from a WARC");
         stream.printf("  %-12s %s%n", "search",
                 "Full-text search posts in a WARC");
+        stream.printf("  %-12s %s%n", "serve",
+                "Browse and search a collection locally");
         stream.printf("  %-12s %s%n", "inspect",
                 "Inspect a WARC file or collection");
         stream.println();

@@ -101,6 +101,18 @@ java -jar target/warcana-0.1.0.jar search collection "climate archive"
 
 The index is rebuilt automatically whenever the completed WARC set changes.
 
+Browse a collection in a local read-only interface:
+
+```sh
+java -jar target/warcana-0.1.0.jar serve collection
+```
+
+Then open `http://127.0.0.1:8080/`. The interface supports full-text search,
+platform, author, date and media filters, recorded post details, and playback
+of media stored in completed collection WARCs. It never fetches missing
+resources from the live web. Use `--host` and `--port` to change the listening
+address; the default is accessible only from the local machine.
+
 Inspect a collection:
 
 ```sh

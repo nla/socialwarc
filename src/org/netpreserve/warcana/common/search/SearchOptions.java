@@ -9,6 +9,7 @@ public record SearchOptions(
         Instant since,
         Instant until,
         boolean hasMedia,
+        SearchSort sort,
         int limit,
         int offset) {
 }

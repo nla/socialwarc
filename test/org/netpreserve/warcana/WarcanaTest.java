@@ -12,6 +12,7 @@ import org.netpreserve.warcana.bluesky.model.Embed;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.common.collection.CollectionStore;
 import org.netpreserve.warcana.common.collection.CollectionJob;
+import org.netpreserve.warcana.common.model.Site;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
 import org.netpreserve.warcana.mastodon.model.Status;
 
@@ -108,22 +109,57 @@ class WarcanaTest {
                     "header_static": ""
                   },
                   "content": "<p>Hello</p>",
+                  "edited_at": "2026-07-30T08:00:00Z",
+                  "in_reply_to_id": "99",
+                  "in_reply_to_account_id": "43",
                   "visibility": "public",
                   "sensitive": false,
                   "spoiler_text": "",
                   "media_attachments": [],
-                  "mentions": [],
+                  "mentions": [{
+                    "id": "43",
+                    "username": "bob",
+                    "acct": "bob@example.social",
+                    "url": "https://example.social/@bob"
+                  }],
                   "tags": [],
                   "emojis": [],
                   "reblogs_count": 0,
                   "favourites_count": 0,
-                  "replies_count": 0
+                  "replies_count": 0,
+                  "card": {
+                    "url": "https://example.test/story",
+                    "title": "Example&nbsp;story &amp; notes",
+                    "description": "A synthetic&nbsp;preview description",
+                    "type": "link",
+                    "author_name": "Example author",
+                    "image": "https://media.example/preview.jpg",
+                    "image_description": "Preview&nbsp;image"
+                  }
                 }
                 """, Status.class);
 
         assertEquals("100", status.id());
         assertEquals("alice", status.account().username());
         assertEquals("2026-07-30T07:00:00Z", status.createdAt().toString());
+        var generic = status.toGenericPost(new Site("example.social"));
+        var attachment = generic.attachments().getFirst();
+        assertEquals("Example\u00a0story & notes", attachment.title());
+        assertEquals(
+                "A synthetic\u00a0preview description",
+                attachment.description());
+        assertEquals("Preview\u00a0image", attachment.altText());
+        assertEquals(
+                "https://media.example/preview.jpg",
+                attachment.thumbnailUrl());
+        assertEquals("100", generic.id());
+        assertEquals(
+                "2026-07-30T08:00:00Z",
+                generic.editedAt().toString());
+        assertEquals("99", generic.thread().parent().id());
+        assertEquals(
+                "bob@example.social",
+                generic.thread().parent().author().username());
     }
 
     @Test
@@ -226,7 +262,8 @@ class WarcanaTest {
         assertEquals(1, json.get("totalHits").asInt());
         assertEquals("https://example.social/@alice/100",
                 json.get("posts").get(0).get("url").asText());
-        assertEquals("alice", json.get("posts").get(0).get("author").get("username").asText());
+        assertEquals("alice@example.social",
+                json.get("posts").get(0).get("author").get("username").asText());
         assertEquals("example.social", json.get("posts").get(0).get("site").get("name").asText());
         assertEquals("<p>Hello</p>", json.get("posts").get(0).get("content").asText());
 
@@ -493,7 +530,8 @@ class WarcanaTest {
             assertTrue(text.contains("owners & people"));
             assertTrue(text.contains("who aren't owners"));
             assertTrue(text.lines()
-                    .filter(line -> line.startsWith("@alice · mastodon"))
+                    .filter(line -> line.startsWith(
+                            "@alice@example.social · mastodon"))
                     .findFirst()
                     .orElseThrow()
                     .endsWith("https://example.social/@alice/100"));

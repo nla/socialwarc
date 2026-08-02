@@ -75,7 +75,8 @@ public record MediaAttachment(
                     originalMeta.width(),
                     originalMeta.height()));
         }
-        return new Attachment(url, type, description, sources);
+        return new Attachment(
+                url, type, description, sources, null, null, null);
     }
 
     public List<String> mediaUrls() {

@@ -180,7 +180,9 @@ public record Tweet(
                                 width, height));
                     }
                 }
-                return new Attachment(mediaUrlHttps, type, extAltText, sources);
+                return new Attachment(
+                        mediaUrlHttps, type, extAltText, sources,
+                        null, null, null);
             }
         }
 
@@ -233,7 +235,10 @@ public record Tweet(
                 replyCount,
                 retweetCount,
                 quoteCount,
-                favoriteCount
+                favoriteCount,
+                idStr,
+                null,
+                null
         );
     }
 }

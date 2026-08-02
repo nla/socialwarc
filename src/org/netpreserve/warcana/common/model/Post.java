@@ -1,6 +1,7 @@
 package org.netpreserve.warcana.common.model;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -24,7 +25,10 @@ public record Post(
         Long repostCount,
         Long quoteCount,
         @JsonAlias("favouriteCount")
-        Long likeCount) {
+        Long likeCount,
+        @Nullable String id,
+        @Nullable Instant editedAt,
+        @Nullable ThreadContext thread) {
 
     public String createdDate() {
         return createdAt.atZone(ZoneId.systemDefault())
@@ -57,5 +61,16 @@ public record Post(
         public String longText() {
             return String.format("%,d %s", count, name);
         }
+    }
+
+    public record ThreadContext(
+            @Nullable PostReference root,
+            @Nullable PostReference parent) {
+    }
+
+    public record PostReference(
+            String id,
+            @Nullable String url,
+            @Nullable Account author) {
     }
 }

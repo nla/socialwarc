@@ -59,7 +59,10 @@ public class WarcPostScanner {
                                 extracted.identity(),
                                 extracted.post(),
                                 response.target().toString(),
-                                response.id().toString()));
+                                response.id().toString(),
+                                input.getFileName().toString(),
+                                response.position(),
+                                response.date()));
                         count++;
                     }
                 }

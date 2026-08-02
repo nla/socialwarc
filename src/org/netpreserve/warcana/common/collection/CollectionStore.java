@@ -43,6 +43,10 @@ public class CollectionStore {
         return root.resolve("index");
     }
 
+    public Path resourceIndexDirectory() {
+        return root.resolve("resource-index");
+    }
+
     public Path logsDirectory() {
         return root.resolve("logs");
     }
@@ -206,6 +210,10 @@ public class CollectionStore {
                             !name.startsWith("warcana-video-");
                 })
                 .toList();
+    }
+
+    public List<Path> completedResourceWarcs() throws IOException {
+        return completedWarcs();
     }
 
     public void log(String message) throws IOException {

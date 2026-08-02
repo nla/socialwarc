@@ -88,7 +88,10 @@ public sealed interface Embed {
                                 : image.fullsize(),
                         "image",
                         image.alt(),
-                        sources));
+                        sources,
+                        null,
+                        null,
+                        null));
             }
             return List.copyOf(attachments);
         }
@@ -139,7 +142,10 @@ public sealed interface Embed {
                                             : aspectRatio.width(),
                                     aspectRatio == null
                                             ? null
-                                            : aspectRatio.height()))));
+                                            : aspectRatio.height())),
+                    null,
+                    null,
+                    null));
         }
 
         @Override
@@ -165,8 +171,11 @@ public sealed interface Embed {
             return List.of(new Attachment(
                     external.uri(),
                     "link",
+                    null,
+                    Collections.emptyList(),
+                    external.title(),
                     external.description(),
-                    Collections.emptyList()));
+                    external.thumb()));
         }
 
         @Override
@@ -398,14 +407,17 @@ public sealed interface Embed {
                     site,
                     null,
                     value.mentions(),
-                    value.text(),
+                    value.richTextHtml(),
                     attachments,
                     null,
                     nestedQuote,
                     replyCount,
                     repostCount,
                     quoteCount,
-                    likeCount);
+                    likeCount,
+                    uri,
+                    null,
+                    null);
         }
     }
 

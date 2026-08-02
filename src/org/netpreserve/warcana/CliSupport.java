@@ -10,7 +10,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Locale;
 
-final class CliSupport {
+public final class CliSupport {
     enum Platform {
         MASTODON,
         BLUESKY;
@@ -26,13 +26,13 @@ final class CliSupport {
         }
     }
 
-    static List<WarcResponseExtractor> responseExtractors() {
+    public static List<WarcResponseExtractor> responseExtractors() {
         return List.of(
                 new MastodonWarcResponseExtractor(),
                 new BlueskyWarcResponseExtractor());
     }
 
-    static Instant parseDate(String value, boolean endOfDay) {
+    public static Instant parseDate(String value, boolean endOfDay) {
         try {
             if (value.contains("T")) {
                 return Instant.parse(value);

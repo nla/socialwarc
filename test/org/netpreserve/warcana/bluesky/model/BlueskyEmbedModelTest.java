@@ -4,11 +4,76 @@ import org.junit.jupiter.api.Test;
 import org.netpreserve.warcana.common.SocialJson;
 import org.netpreserve.warcana.common.model.Site;
 
+import java.time.Instant;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class BlueskyEmbedModelTest {
+    @Test
+    void preservesReplyParentAndThreadRoot() {
+        var author = new Author(
+                "did:plc:alice", "alice.example", "Alice", null, null);
+        var parentAuthor = new Author(
+                "did:plc:bob", "bob.example", "Bob", null, null);
+        var rootAuthor = new Author(
+                "did:plc:carol", "carol.example", "Carol", null, null);
+        var view = new PostView(
+                "at://did:plc:alice/app.bsky.feed.post/reply",
+                "reply-cid",
+                author,
+                new PostRecord(
+                        "app.bsky.feed.post",
+                        "A reply",
+                        Instant.parse("2026-07-30T07:00:00Z"),
+                        null,
+                        null),
+                null, 0, 0, 0, 0,
+                Instant.parse("2026-07-30T07:00:01Z"));
+        var reply = new FeedItem.ReplyContext(
+                new FeedItem.ReplyPost(
+                        "at://did:plc:carol/app.bsky.feed.post/root",
+                        rootAuthor),
+                new FeedItem.ReplyPost(
+                        "at://did:plc:bob/app.bsky.feed.post/parent",
+                        parentAuthor));
+
+        var generic = view.toGenericPost(reply, new Site("Bluesky"));
+
+        assertEquals(view.uri(), generic.id());
+        assertEquals(reply.parent().uri(), generic.thread().parent().id());
+        assertEquals(
+                "https://bsky.app/profile/bob.example/post/parent",
+                generic.thread().parent().url());
+        assertEquals(reply.root().uri(), generic.thread().root().id());
+    }
+
+    @Test
+    void preservesExternalLinkPreviewMetadata() throws Exception {
+        var embed = SocialJson.mapper.readValue("""
+                {
+                  "$type": "app.bsky.embed.external#view",
+                  "external": {
+                    "uri": "https://example.test/story",
+                    "title": "Example story",
+                    "description": "A synthetic preview description",
+                    "thumb": "https://media.example/preview.jpg"
+                  }
+                }
+                """, Embed.class);
+
+        var attachment = embed.attachments().getFirst();
+        assertEquals("link", attachment.type());
+        assertEquals("Example story", attachment.title());
+        assertEquals(
+                "A synthetic preview description",
+                attachment.description());
+        assertEquals(
+                "https://media.example/preview.jpg",
+                attachment.thumbnailUrl());
+    }
+
     @Test
     void deserializesNestedEmbedViewsUsingTypeAnnotations() throws Exception {
         PostView post = SocialJson.mapper.readValue("""
@@ -21,7 +86,14 @@ class BlueskyEmbedModelTest {
                   },
                   "record": {
                     "$type": "app.bsky.feed.post",
-                    "text": "Outer post",
+                    "text": "Outer link",
+                    "facets": [{
+                      "index": {"byteStart": 6, "byteEnd": 10},
+                      "features": [{
+                        "$type": "app.bsky.richtext.facet#link",
+                        "uri": "https://outer.example"
+                      }]
+                    }],
                     "createdAt": "2026-07-30T07:00:00Z"
                   },
                   "embed": {
@@ -46,7 +118,14 @@ class BlueskyEmbedModelTest {
                         },
                         "value": {
                           "$type": "app.bsky.feed.post",
-                          "text": "Quoted post",
+                          "text": "Quoted link",
+                          "facets": [{
+                            "index": {"byteStart": 7, "byteEnd": 11},
+                            "features": [{
+                              "$type": "app.bsky.richtext.facet#link",
+                              "uri": "https://quoted.example"
+                            }]
+                          }],
                           "createdAt": "2026-07-29T07:00:00Z"
                         },
                         "embeds": [{
@@ -83,7 +162,13 @@ class BlueskyEmbedModelTest {
 
         var generic = post.toGenericPost(null, new Site("bluesky"));
         assertEquals(1, generic.attachments().size());
+        assertEquals(
+                "Outer <a href=\"https://outer.example\">link</a>",
+                generic.content());
         assertNotNull(generic.quotedPost());
+        assertEquals(
+                "Quoted <a href=\"https://quoted.example\">link</a>",
+                generic.quotedPost().content());
         assertEquals("https://bsky.app/profile/bob.example/post/quoted",
                 generic.quotedPost().url());
         assertEquals(1, generic.quotedPost().attachments().size());

@@ -32,7 +32,7 @@ public record PostView(
                 site,
                 to,
                 record.mentions(),
-                record.text(),
+                record.richTextHtml(),
                 embed == null
                         ? Collections.emptyList()
                         : embed.attachments(),
@@ -41,13 +41,40 @@ public record PostView(
                 replyCount,
                 repostCount,
                 quoteCount,
-                likeCount);
+                likeCount,
+                uri,
+                null,
+                threadContext(reply));
+    }
+
+    private Post.ThreadContext threadContext(FeedItem.ReplyContext reply) {
+        if (reply == null) {
+            return null;
+        }
+        return new Post.ThreadContext(
+                postReference(reply.root()),
+                postReference(reply.parent()));
+    }
+
+    private static Post.PostReference postReference(FeedItem.ReplyPost post) {
+        if (post == null || post.uri() == null) {
+            return null;
+        }
+        Author author = post.author();
+        return new Post.PostReference(
+                post.uri(),
+                author == null ? null : webUrl(post.uri(), author.handle()),
+                author == null ? null : author.toGenericAccount());
     }
 
     public String webUrl() {
+        return webUrl(uri, author.handle());
+    }
+
+    private static String webUrl(String uri, String handle) {
         int slash = uri.lastIndexOf('/');
         String recordKey = slash < 0 ? uri : uri.substring(slash + 1);
-        return "https://bsky.app/profile/" + author.handle() + "/post/" + recordKey;
+        return "https://bsky.app/profile/" + handle + "/post/" + recordKey;
     }
 
     public List<String> mediaUrls() {
