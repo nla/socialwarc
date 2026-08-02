@@ -76,6 +76,15 @@ class WarcanaServerTest {
                             .firstValue("Content-Security-Policy")
                             .orElseThrow()
                             .contains("default-src 'self'"));
+                    var pageDocument = Jsoup.parse(page.body());
+                    assertEquals(2, pageDocument.select(
+                            ".timeline .timeline-bar").size());
+                    assertEquals(
+                            "2026-07-29",
+                            pageDocument.selectFirst(".timeline")
+                                    .attr("data-start"));
+                    assertTrue(page.body().contains(
+                            "<script src=/timeline.js defer></script>"));
 
                     var search = client.send(
                             HttpRequest.newBuilder(
@@ -93,9 +102,20 @@ class WarcanaServerTest {
                             "Hello from the archive",
                             searchDocument.selectFirst(".post .content").text());
                     assertTrue(searchDocument.select(".snippet").isEmpty());
+                    assertEquals(
+                            "1 post",
+                            searchDocument.selectFirst(".timeline-bar title")
+                                    .text().replaceFirst("^.*: ", ""));
                     assertTrue(search.body().contains(
                             "/?platform=mastodon&amp;author=" +
                                     "alice%40example.social"));
+                    var timelineScript = client.send(
+                            HttpRequest.newBuilder(base.resolve("/timeline.js"))
+                                    .build(),
+                            BodyHandlers.ofString());
+                    assertEquals(200, timelineScript.statusCode());
+                    assertTrue(timelineScript.body().contains(
+                            "setPointerCapture"));
                     assertTrue(search.body().contains(
                             ">@alice@example.social</a>"));
                     assertTrue(!search.body().contains("Open post"));

@@ -17,6 +17,7 @@ import org.netpreserve.warcana.common.search.SearchHit;
 import org.netpreserve.warcana.common.search.SearchOptions;
 import org.netpreserve.warcana.common.search.SearchResults;
 import org.netpreserve.warcana.common.search.SearchSort;
+import org.netpreserve.warcana.common.search.SearchTimeline;
 import org.netpreserve.warcana.common.search.WarcSearchIndex;
 import tools.jackson.databind.JsonNode;
 
@@ -112,6 +113,10 @@ public final class WarcanaServer implements AutoCloseable {
                 staticResource(
                         exchange, "history.js",
                         "text/javascript; charset=utf-8");
+            } else if ("/timeline.js".equals(path)) {
+                staticResource(
+                        exchange, "timeline.js",
+                        "text/javascript; charset=utf-8");
             } else if ("/post".equals(path)) {
                 postPage(exchange);
             } else if ("/post.json".equals(path)) {
@@ -159,14 +164,16 @@ public final class WarcanaServer implements AutoCloseable {
             throw new IllegalArgumentException("since must not be after until");
         }
 
+        var options = new SearchOptions(
+                text, platform, author, since, until,
+                hasMedia, sort, DEFAULT_PAGE_SIZE, offset);
         SearchResults results = searchIndex.search(
-                store.indexDirectory(),
-                new SearchOptions(
-                        text, platform, author, since, until,
-                        hasMedia, sort, DEFAULT_PAGE_SIZE, offset));
+                store.indexDirectory(), options);
+        SearchTimeline timeline = searchIndex.timeline(
+                store.indexDirectory(), options);
         Map<String, String> resources = resourcesFor(results.hits());
         html(exchange, 200, CollectionHtmlRenderer.index(
-                query, results.totalHits(), results.hits(), resources,
+                query, results.totalHits(), results.hits(), timeline, resources,
                 threadTargetsFor(results.hits())));
     }
 

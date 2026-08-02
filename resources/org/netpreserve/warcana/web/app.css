@@ -92,6 +92,65 @@ button {
   gap: .15rem;
 }
 
+.timeline {
+  margin: .75rem 0;
+}
+
+.timeline h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.timeline svg {
+  display: block;
+  width: 100%;
+  height: 80px;
+  border-bottom: 1px solid #999;
+  touch-action: none;
+  user-select: none;
+}
+
+.timeline-bar {
+  fill: #777;
+}
+
+.timeline-bar.selected {
+  fill: #175c92;
+}
+
+.timeline-selection {
+  fill: rgb(23 92 146 / 25%);
+  stroke: #175c92;
+  vector-effect: non-scaling-stroke;
+}
+
+.timeline-selection[hidden] {
+  display: none;
+}
+
+.timeline-target {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.timeline-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .25rem .75rem;
+  margin-top: .2rem;
+  font-size: .8rem;
+}
+
+.timeline-caption output {
+  font-weight: 600;
+}
+
+.timeline-caption button {
+  padding: .1rem .35rem;
+}
+
 .results > header {
   display: flex;
   align-items: baseline;

@@ -11,9 +11,12 @@ import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.DocValues;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.NumericDocValues;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
@@ -23,6 +26,8 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.ScoreMode;
+import org.apache.lucene.search.SimpleCollector;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.TermQuery;
@@ -47,8 +52,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -221,6 +231,21 @@ public class WarcSearchIndex {
             return new SearchResults(totalHits, List.copyOf(hits));
         } catch (ParseException e) {
             throw new IllegalArgumentException("Invalid search query: " + e.getMessage(), e);
+        }
+    }
+
+    public SearchTimeline timeline(Path index, SearchOptions options)
+            throws IOException {
+        try (var directory = new NIOFSDirectory(index);
+             var reader = DirectoryReader.open(directory);
+             Analyzer analyzer = new StandardAnalyzer()) {
+            var searcher = new IndexSearcher(reader);
+            var collector = new CreatedDateCollector();
+            searcher.search(buildQuery(options, analyzer, false), collector);
+            return buildTimeline(collector.values());
+        } catch (ParseException e) {
+            throw new IllegalArgumentException(
+                    "Invalid search query: " + e.getMessage(), e);
         }
     }
 
@@ -500,6 +525,12 @@ public class WarcSearchIndex {
 
     private static Query buildQuery(
             SearchOptions options, Analyzer analyzer) throws ParseException {
+        return buildQuery(options, analyzer, true);
+    }
+
+    private static Query buildQuery(
+            SearchOptions options, Analyzer analyzer, boolean includeDates)
+            throws ParseException {
         var parser = new QueryParser(FIELD_TEXT, analyzer);
         parser.setDefaultOperator(QueryParser.Operator.AND);
         Query textQuery = hasQuery(options)
@@ -518,7 +549,8 @@ public class WarcSearchIndex {
                     normalize(options.author().replaceFirst("^@", "")))),
                     BooleanClause.Occur.FILTER);
         }
-        if (options.since() != null || options.until() != null) {
+        if (includeDates &&
+                (options.since() != null || options.until() != null)) {
             long lower = options.since() == null
                     ? Long.MIN_VALUE
                     : options.since().toEpochMilli();
@@ -535,6 +567,113 @@ public class WarcSearchIndex {
                     BooleanClause.Occur.FILTER);
         }
         return query.build();
+    }
+
+    private static SearchTimeline buildTimeline(long[] timestamps) {
+        if (timestamps.length == 0) {
+            return SearchTimeline.empty();
+        }
+        LocalDate minimum = Instant.ofEpochMilli(Arrays.stream(timestamps)
+                        .min().orElseThrow())
+                .atZone(ZoneOffset.UTC).toLocalDate();
+        LocalDate maximum = Instant.ofEpochMilli(Arrays.stream(timestamps)
+                        .max().orElseThrow())
+                .atZone(ZoneOffset.UTC).toLocalDate();
+        SearchTimeline.Unit unit = timelineUnit(minimum, maximum);
+        LocalDate start = bucketStart(minimum, unit);
+        LocalDate finalBucket = bucketStart(maximum, unit);
+        var counts = new LinkedHashMap<LocalDate, Long>();
+        for (LocalDate bucket = start;
+             !bucket.isAfter(finalBucket);
+             bucket = nextBucket(bucket, unit)) {
+            counts.put(bucket, 0L);
+        }
+        for (long timestamp : timestamps) {
+            LocalDate date = Instant.ofEpochMilli(timestamp)
+                    .atZone(ZoneOffset.UTC).toLocalDate();
+            counts.computeIfPresent(
+                    bucketStart(date, unit),
+                    (ignored, count) -> count + 1);
+        }
+        List<SearchTimeline.Bucket> buckets = counts.entrySet().stream()
+                .map(entry -> new SearchTimeline.Bucket(
+                        entry.getKey(),
+                        nextBucket(entry.getKey(), unit).minusDays(1),
+                        entry.getValue()))
+                .toList();
+        return new SearchTimeline(
+                buckets.getFirst().start(),
+                buckets.getLast().end(),
+                unit,
+                buckets);
+    }
+
+    private static SearchTimeline.Unit timelineUnit(
+            LocalDate minimum, LocalDate maximum) {
+        long days = ChronoUnit.DAYS.between(minimum, maximum) + 1;
+        if (days <= 60) {
+            return SearchTimeline.Unit.DAY;
+        }
+        if (days <= 60 * 7) {
+            return SearchTimeline.Unit.WEEK;
+        }
+        long months = ChronoUnit.MONTHS.between(
+                minimum.withDayOfMonth(1), maximum.withDayOfMonth(1)) + 1;
+        return months <= 60
+                ? SearchTimeline.Unit.MONTH
+                : SearchTimeline.Unit.YEAR;
+    }
+
+    private static LocalDate bucketStart(
+            LocalDate date, SearchTimeline.Unit unit) {
+        return switch (unit) {
+            case DAY -> date;
+            case WEEK -> date.with(TemporalAdjusters.previousOrSame(
+                    java.time.DayOfWeek.MONDAY));
+            case MONTH -> date.withDayOfMonth(1);
+            case YEAR -> date.withDayOfYear(1);
+        };
+    }
+
+    private static LocalDate nextBucket(
+            LocalDate date, SearchTimeline.Unit unit) {
+        return switch (unit) {
+            case DAY -> date.plusDays(1);
+            case WEEK -> date.plusWeeks(1);
+            case MONTH -> date.plusMonths(1);
+            case YEAR -> date.plusYears(1);
+        };
+    }
+
+    private static final class CreatedDateCollector extends SimpleCollector {
+        private NumericDocValues created;
+        private long[] values = new long[64];
+        private int size;
+
+        @Override
+        protected void doSetNextReader(LeafReaderContext context)
+                throws IOException {
+            created = DocValues.getNumeric(context.reader(), FIELD_CREATED);
+        }
+
+        @Override
+        public void collect(int document) throws IOException {
+            if (created.advanceExact(document)) {
+                if (size == values.length) {
+                    values = Arrays.copyOf(values, values.length * 2);
+                }
+                values[size++] = created.longValue();
+            }
+        }
+
+        @Override
+        public ScoreMode scoreMode() {
+            return ScoreMode.COMPLETE_NO_SCORES;
+        }
+
+        long[] values() {
+            return Arrays.copyOf(values, size);
+        }
     }
 
     private static boolean hasQuery(SearchOptions options) {

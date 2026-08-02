@@ -10,6 +10,7 @@ import org.netpreserve.warcana.common.model.Account;
 import org.netpreserve.warcana.common.model.Attachment;
 import org.netpreserve.warcana.common.model.Post;
 import org.netpreserve.warcana.common.search.SearchHit;
+import org.netpreserve.warcana.common.search.SearchTimeline;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -18,6 +19,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -38,6 +40,7 @@ final class CollectionHtmlRenderer {
             Map<String, String> query,
             long totalHits,
             List<SearchHit> hits,
+            SearchTimeline timeline,
             Map<String, String> resources,
             Map<String, SearchHit> threadTargets) {
         StringBuilder html = start("Warcana", false);
@@ -73,10 +76,10 @@ final class CollectionHtmlRenderer {
                 .append("<label>Author <input name=author value=\"")
                 .append(escape(query.getOrDefault("author", "")))
                 .append("\"></label>")
-                .append("<label>From <input name=since type=date value=\"")
+                .append("<label>From <input id=since name=since type=date value=\"")
                 .append(escape(query.getOrDefault("since", "")))
                 .append("\"></label>")
-                .append("<label>Until <input name=until type=date value=\"")
+                .append("<label>Until <input id=until name=until type=date value=\"")
                 .append(escape(query.getOrDefault("until", "")))
                 .append("\"></label>")
                 .append("<label><input name=hasMedia type=checkbox value=true")
@@ -86,7 +89,8 @@ final class CollectionHtmlRenderer {
 
         String text = query.getOrDefault("q", "");
         String author = query.getOrDefault("author", "");
-        html.append("<section class=results><header><h1>")
+        html.append(timeline(timeline, query))
+                .append("<section class=results><header><h1>")
                 .append(!text.isBlank()
                         ? "Results for “" + escape(text) + "”"
                         : !author.isBlank()
@@ -110,8 +114,78 @@ final class CollectionHtmlRenderer {
             html.append("</ol>");
         }
         html.append(pagination(query, totalHits, hits.size()))
-                .append("</section></main></body></html>");
+                .append("</section></main>")
+                .append("<script src=/timeline.js defer></script>")
+                .append("</body></html>");
         return html.toString();
+    }
+
+    private static String timeline(
+            SearchTimeline timeline, Map<String, String> query) {
+        if (timeline == null || timeline.buckets().isEmpty()) {
+            return "";
+        }
+        int count = timeline.buckets().size();
+        long maximum = timeline.buckets().stream()
+                .mapToLong(SearchTimeline.Bucket::count)
+                .max().orElse(1);
+        double bucketWidth = 600.0 / count;
+        StringBuilder html = new StringBuilder("<section class=timeline data-start=\"")
+                .append(timeline.start())
+                .append("\" data-end=\"")
+                .append(timeline.end())
+                .append("\"><h2>Posts over time</h2>")
+                .append("<svg viewBox=\"0 0 600 80\" preserveAspectRatio=none ")
+                .append("role=img aria-label=\"Post dates. Drag to select a range.\">")
+                .append("<g class=timeline-bars>");
+        for (int i = 0; i < count; i++) {
+            SearchTimeline.Bucket bucket = timeline.buckets().get(i);
+            double height = bucket.count() == 0
+                    ? 0
+                    : Math.max(1, 70 * Math.sqrt((double) bucket.count() / maximum));
+            html.append("<rect class=timeline-bar x=\"")
+                    .append(decimal(i * bucketWidth))
+                    .append("\" y=\"")
+                    .append(decimal(70 - height))
+                    .append("\" width=\"")
+                    .append(decimal(Math.max(.5, bucketWidth - .5)))
+                    .append("\" height=\"")
+                    .append(decimal(height))
+                    .append("\" data-start=\"")
+                    .append(bucket.start())
+                    .append("\" data-end=\"")
+                    .append(bucket.end())
+                    .append("\"><title>")
+                    .append(bucket.start())
+                    .append(" – ")
+                    .append(bucket.end())
+                    .append(": ")
+                    .append(bucket.count())
+                    .append(bucket.count() == 1 ? " post" : " posts")
+                    .append("</title></rect>");
+        }
+        String since = query.getOrDefault("since", "");
+        String until = query.getOrDefault("until", "");
+        return html.append("</g><rect class=timeline-selection hidden y=0 height=70>")
+                .append("</rect><rect class=timeline-target x=0 y=0 width=600 height=70>")
+                .append("</rect></svg><div class=timeline-caption><span>")
+                .append(timeline.start())
+                .append(" – ")
+                .append(timeline.end())
+                .append("</span><output for=\"since until\">")
+                .append(since.isBlank() && until.isBlank()
+                        ? "All dates"
+                        : escape((since.isBlank() ? timeline.start().toString() : since) +
+                                " – " +
+                                (until.isBlank() ? timeline.end().toString() : until)))
+                .append("</output><button type=button class=timeline-clear")
+                .append(since.isBlank() && until.isBlank() ? " hidden" : "")
+                .append(">Clear dates</button></div></section>")
+                .toString();
+    }
+
+    private static String decimal(double value) {
+        return String.format(Locale.ROOT, "%.2f", value);
     }
 
     static String post(
