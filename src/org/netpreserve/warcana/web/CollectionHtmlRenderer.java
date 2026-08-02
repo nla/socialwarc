@@ -60,9 +60,12 @@ final class CollectionHtmlRenderer {
                     ? "newest"
                     : "relevance";
         }
-        html.append("<details class=filters")
-                .append(filtered ? " open" : "")
-                .append("><summary>Filters</summary><div>")
+        html.append("<details class=filters><summary>Filters")
+                .append(filtered
+                        ? " <span class=filter-summary>" +
+                                escape(appliedFilterSummary(query)) + "</span>"
+                        : "")
+                .append("</summary><div class=filter-grid>")
                 .append("<label>Platform <select name=platform>")
                 .append(option("", "All", query.get("platform")))
                 .append(option("mastodon", "Mastodon", query.get("platform")))
@@ -73,18 +76,22 @@ final class CollectionHtmlRenderer {
                 .append(option("newest", "Newest first", selectedSort))
                 .append(option("oldest", "Oldest first", selectedSort))
                 .append("</select></label>")
-                .append("<label>Author <input name=author value=\"")
+                .append("<label class=author-filter>Author <input name=author value=\"")
                 .append(escape(query.getOrDefault("author", "")))
                 .append("\"></label>")
+                .append("<div class=date-filter role=group aria-label=\"Date range\">")
                 .append("<label>From <input id=since name=since type=date value=\"")
                 .append(escape(query.getOrDefault("since", "")))
                 .append("\"></label>")
                 .append("<label>Until <input id=until name=until type=date value=\"")
                 .append(escape(query.getOrDefault("until", "")))
-                .append("\"></label>")
-                .append("<label><input name=hasMedia type=checkbox value=true")
+                .append("\"></label></div>")
+                .append("<div class=filter-footer><label class=checkbox-filter>")
+                .append("<input name=hasMedia type=checkbox value=true")
                 .append("true".equals(query.get("hasMedia")) ? " checked" : "")
-                .append("> Has media</label> <button>Apply</button> <a href=/>Clear</a>")
+                .append("> <span>Has media</span></label>")
+                .append("<div class=filter-actions><button>Apply</button>")
+                .append("<a href=/>Clear</a></div></div>")
                 .append("</div></details></form>");
 
         String text = query.getOrDefault("q", "");
@@ -739,6 +746,40 @@ final class CollectionHtmlRenderer {
 
     private static boolean present(Map<String, String> values, String key) {
         return values.get(key) != null && !values.get(key).isBlank();
+    }
+
+    private static String appliedFilterSummary(Map<String, String> query) {
+        List<String> filters = new ArrayList<>();
+        String platform = query.get("platform");
+        if ("mastodon".equals(platform)) {
+            filters.add("Mastodon");
+        } else if ("bluesky".equals(platform)) {
+            filters.add("Bluesky");
+        }
+        if (present(query, "author")) {
+            filters.add("@" + query.get("author").replaceFirst("^@", ""));
+        }
+        String since = query.get("since");
+        String until = query.get("until");
+        if (present(query, "since") && present(query, "until")) {
+            filters.add(since + "–" + until);
+        } else if (present(query, "since")) {
+            filters.add("from " + since);
+        } else if (present(query, "until")) {
+            filters.add("until " + until);
+        }
+        if ("true".equals(query.get("hasMedia"))) {
+            filters.add("has media");
+        }
+        String sort = query.get("sort");
+        if (present(query, "sort")) {
+            filters.add(switch (sort) {
+                case "newest" -> "newest first";
+                case "oldest" -> "oldest first";
+                default -> "relevance";
+            });
+        }
+        return String.join(" · ", filters);
     }
 
     private static int parseInt(String value, int fallback) {

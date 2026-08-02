@@ -177,6 +177,11 @@ class WarcanaServerTest {
                             .contains("default-src 'self'"));
                     var pageDocument = Jsoup.parse(page.body());
                     assertEquals(2, pageDocument.select(
+                            ".date-filter > label").size());
+                    assertEquals(1, pageDocument.select(
+                            ".checkbox-filter > input[name=hasMedia] + span")
+                            .size());
+                    assertEquals(2, pageDocument.select(
                             ".timeline .timeline-bar").size());
                     assertEquals(
                             "2026-07-29",
@@ -329,13 +334,26 @@ class WarcanaServerTest {
                             newest.body().indexOf("Older post"));
                     var withMedia = client.send(
                             HttpRequest.newBuilder(
-                                    base.resolve("/?hasMedia=true"))
+                                    base.resolve("/?platform=mastodon&author=" +
+                                            "alice%40example.social&since=" +
+                                            "2026-07-01&until=2026-07-31&" +
+                                            "hasMedia=true&sort=oldest"))
                                     .build(),
                             BodyHandlers.ofString());
                     assertEquals(200, withMedia.statusCode());
                     assertTrue(withMedia.body().contains(
                             "Hello from the archive"));
                     assertTrue(!withMedia.body().contains("Older post"));
+                    var filteredDocument = Jsoup.parse(withMedia.body());
+                    var filterDetails = filteredDocument.selectFirst(
+                            "details.filters");
+                    assertTrue(filterDetails != null);
+                    assertTrue(!filterDetails.hasAttr("open"));
+                    assertEquals(
+                            "Mastodon · @alice@example.social · " +
+                                    "2026-07-01–2026-07-31 · has media · " +
+                                    "oldest first",
+                            filterDetails.selectFirst(".filter-summary").text());
                     String mediaUrl = "https://media.example/image.jpg";
                     String id = WarcResourceIndex.idForUrl(mediaUrl);
                     assertEquals(WarcResourceIndex.idForUrl(mediaUrl), id);

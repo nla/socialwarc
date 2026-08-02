@@ -208,17 +208,65 @@ button {
   cursor: pointer;
 }
 
-.filters > div {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
+.filter-summary {
+  margin-left: .35rem;
+  color: #666;
+  font-size: .85rem;
+  font-weight: 400;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: .5rem;
   margin-top: .5rem;
 }
 
-.filters label {
+.filter-grid > label,
+.date-filter label {
   display: grid;
   gap: .15rem;
+}
+
+.filter-grid select,
+.filter-grid input[type="text"],
+.filter-grid input[type="date"],
+.author-filter input {
+  width: 100%;
+  min-width: 0;
+}
+
+.author-filter,
+.date-filter,
+.filter-footer {
+  grid-column: 1 / -1;
+}
+
+.date-filter {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .5rem;
+}
+
+.filter-footer,
+.filter-actions,
+.checkbox-filter {
+  display: flex;
+  align-items: center;
+}
+
+.filter-footer {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.filter-actions,
+.checkbox-filter {
+  gap: .5rem;
+}
+
+.checkbox-filter input {
+  margin: 0;
 }
 
 .timeline {
@@ -524,10 +572,6 @@ h1 {
 }
 
 @media (max-width: 480px) {
-  .filters > div {
-    display: grid;
-  }
-
   .post-dates {
     width: 100%;
     margin-left: 0;
