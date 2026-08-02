@@ -31,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.UUID;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -58,6 +59,8 @@ public final class WarcanaServer implements AutoCloseable {
     private final WarcResourceIndex resourceIndex;
     private final HttpServer server;
     private final ExecutorService executor;
+    private final ArchiveController archiveController;
+    private final String csrfToken = UUID.randomUUID().toString();
 
     public WarcanaServer(
             Path collection, InetSocketAddress address,
@@ -66,22 +69,17 @@ public final class WarcanaServer implements AutoCloseable {
         if (!store.isCollection()) {
             throw new IOException("Not a Warcana collection: " + collection);
         }
-        List<Path> postWarcs = store.completedPostWarcs();
-        if (postWarcs.isEmpty()) {
-            throw new IOException(
-                    "Collection contains no completed post WARC files: " +
-                            collection);
-        }
-
         searchIndex = new WarcSearchIndex(CliSupport.responseExtractors());
-        searchIndex.ensureCurrent(
-                postWarcs, store.indexDirectory(), rebuild, progress);
         resourceIndex = new WarcResourceIndex();
-        resourceIndex.ensureCurrent(
-                store.completedResourceWarcs(),
-                store.resourceIndexDirectory(),
-                rebuild,
-                progress);
+        List<Path> postWarcs = store.completedPostWarcs();
+        if (!postWarcs.isEmpty()) {
+            searchIndex.ensureCurrent(
+                    postWarcs, store.indexDirectory(), rebuild, progress);
+            resourceIndex.ensureCurrent(
+                    store.completedResourceWarcs(),
+                    store.resourceIndexDirectory(), rebuild, progress);
+        }
+        archiveController = new ArchiveController(store);
 
         server = HttpServer.create(address, 0);
         executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -123,6 +121,16 @@ public final class WarcanaServer implements AutoCloseable {
                 postJson(exchange);
             } else if (path.startsWith("/media/")) {
                 media(exchange, path.substring("/media/".length()));
+            } else if ("/manage".equals(path)) {
+                managePage(exchange);
+            } else if ("/manage/accounts".equals(path)) {
+                saveAccounts(exchange);
+            } else if ("/manage/run".equals(path)) {
+                startArchive(exchange);
+            } else if ("/manage/stop".equals(path)) {
+                stopArchive(exchange);
+            } else if ("/manage/schedule".equals(path)) {
+                saveSchedule(exchange);
             } else {
                 error(exchange, 404, "Not found");
             }
@@ -143,6 +151,16 @@ public final class WarcanaServer implements AutoCloseable {
 
     private void searchPage(HttpExchange exchange) throws IOException {
         requireGet(exchange);
+        List<Path> postWarcs = store.completedPostWarcs();
+        if (postWarcs.isEmpty()) {
+            html(exchange, 200, CollectionHtmlRenderer.empty());
+            return;
+        }
+        searchIndex.ensureCurrent(
+                postWarcs, store.indexDirectory(), false, ProgressReporter.NONE);
+        resourceIndex.ensureCurrent(
+                store.completedResourceWarcs(), store.resourceIndexDirectory(),
+                false, ProgressReporter.NONE);
         Map<String, String> query = queryParameters(exchange.getRequestURI());
         String text = query.getOrDefault("q", "");
         String platform = blankToNull(query.get("platform"));
@@ -189,6 +207,94 @@ public final class WarcanaServer implements AutoCloseable {
                 resourcesFor(thread),
                 threadTargetsFor(thread),
                 resolved.quotedUrl()));
+    }
+
+    private void managePage(HttpExchange exchange) throws IOException {
+        requireLocalManagement(exchange);
+        requireGet(exchange);
+        html(exchange, 200, ManagementHtmlRenderer.page(
+                Files.readString(store.accountsFile(), StandardCharsets.UTF_8),
+                archiveController.status(), csrfToken,
+                store.completedWarcs().size(), store.activeJobFiles().size(),
+                queryParameters(exchange.getRequestURI()).get("message")));
+    }
+
+    private void saveAccounts(HttpExchange exchange) throws IOException {
+        requireLocalManagement(exchange);
+        Map<String, String> form = form(exchange);
+        requireCsrf(form);
+        store.writeAccounts(form.getOrDefault("accounts", ""));
+        redirect(exchange, "/manage?message=Accounts+saved");
+    }
+
+    private void startArchive(HttpExchange exchange) throws IOException {
+        requireLocalManagement(exchange);
+        Map<String, String> form = form(exchange);
+        requireCsrf(form);
+        boolean started = archiveController.start();
+        redirect(exchange, "/manage?message=" +
+                (started ? "Capture+started" : "Capture+already+running"));
+    }
+
+    private void stopArchive(HttpExchange exchange) throws IOException {
+        requireLocalManagement(exchange);
+        Map<String, String> form = form(exchange);
+        requireCsrf(form);
+        boolean stopped = archiveController.stop();
+        redirect(exchange, "/manage?message=" +
+                (stopped ? "Stop+requested" : "No+capture+is+running"));
+    }
+
+    private void saveSchedule(HttpExchange exchange) throws IOException {
+        requireLocalManagement(exchange);
+        Map<String, String> form = form(exchange);
+        requireCsrf(form);
+        int interval = parseInt(form.get("intervalHours"), 24);
+        archiveController.update(new ArchiveController.Settings(
+                "true".equals(form.get("enabled")), interval,
+                "true".equals(form.get("includeMedia")),
+                "true".equals(form.get("includeVideo"))));
+        redirect(exchange, "/manage?message=Schedule+saved");
+    }
+
+    private Map<String, String> form(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            methodNotAllowed(exchange, "POST");
+            throw new ResponseSentException();
+        }
+        String type = exchange.getRequestHeaders().getFirst("Content-Type");
+        if (type == null || !type.toLowerCase().startsWith(
+                "application/x-www-form-urlencoded")) {
+            throw new IllegalArgumentException("Expected an HTML form submission");
+        }
+        byte[] body = exchange.getRequestBody().readNBytes(64 * 1024 + 1);
+        if (body.length > 64 * 1024) {
+            throw new IllegalArgumentException("Form is too large");
+        }
+        return queryParameters(URI.create("/?" +
+                new String(body, StandardCharsets.UTF_8)));
+    }
+
+    private void requireCsrf(Map<String, String> form) {
+        if (!csrfToken.equals(form.get("csrf"))) {
+            throw new IllegalArgumentException(
+                    "Invalid form token; reload the page");
+        }
+    }
+
+    private static void requireLocalManagement(HttpExchange exchange)
+            throws IOException {
+        if (!exchange.getRemoteAddress().getAddress().isLoopbackAddress()) {
+            error(exchange, 403,
+                    "Collection management is available only from this computer");
+            throw new ResponseSentException();
+        }
+    }
+
+    private static void redirect(HttpExchange exchange, String location)
+            throws IOException {
+        exchange.getResponseHeaders().set("Location", location);
+        exchange.sendResponseHeaders(303, -1);
     }
 
     private void postJson(HttpExchange exchange) throws IOException {
@@ -820,6 +926,7 @@ public final class WarcanaServer implements AutoCloseable {
     @Override
     public void close() {
         server.stop(0);
+        archiveController.close();
         executor.close();
     }
 

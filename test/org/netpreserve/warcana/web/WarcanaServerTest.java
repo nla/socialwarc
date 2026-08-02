@@ -16,9 +16,11 @@ import org.netpreserve.warcana.common.model.Post;
 import org.netpreserve.warcana.common.resource.WarcResourceIndex;
 import org.netpreserve.warcana.common.search.SearchHit;
 
+import java.io.PrintStream;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse.BodyHandlers;
@@ -35,6 +37,103 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WarcanaServerTest {
+    @Test
+    void captureLogKeepsFormattedOutputOnOneLine() throws Exception {
+        Path root = Files.createTempDirectory("warcana-log-");
+        try {
+            var store = new CollectionStore(root);
+            store.initialize();
+            try (var controller = new ArchiveController(store)) {
+                try (var stream = new PrintStream(
+                        controller.lineOutput(), true,
+                        StandardCharsets.UTF_8)) {
+                    stream.printf("Archived %d posts from %s into %s%n",
+                            0, "@alice@example.social", "posts.warc.open");
+                    stream.print("Captured ");
+                    stream.print(2);
+                    stream.print(" media resources");
+                }
+
+                List<String> output = controller.status().output();
+                assertEquals(2, output.size());
+                assertTrue(output.get(0).endsWith(
+                        "Archived 0 posts from @alice@example.social " +
+                                "into posts.warc.open"));
+                assertTrue(output.get(1).endsWith(
+                        "Captured 2 media resources"));
+            }
+        } finally {
+            deleteTree(root);
+        }
+    }
+
+    @Test
+    void managesAnEmptyCollectionAndPersistsSchedule() throws Exception {
+        Path root = Files.createTempDirectory("warcana-manage-");
+        try {
+            var store = new CollectionStore(root);
+            store.initialize();
+            WarcanaServer created;
+            try {
+                created = new WarcanaServer(
+                        root, new InetSocketAddress("127.0.0.1", 0),
+                        false, ProgressReporter.NONE);
+            } catch (SocketException e) {
+                Assumptions.assumeTrue(
+                        false, "Loopback sockets are unavailable in this sandbox");
+                return;
+            }
+            try (var server = created;
+                 var client = HttpClient.newHttpClient()) {
+                server.start();
+                URI base = server.baseUri();
+                var empty = client.send(
+                        HttpRequest.newBuilder(base).build(),
+                        BodyHandlers.ofString());
+                assertEquals(200, empty.statusCode());
+                assertTrue(empty.body().contains("No archived posts yet"));
+                assertTrue(empty.body().contains("start the first capture"));
+
+                var manage = client.send(
+                        HttpRequest.newBuilder(base.resolve("/manage")).build(),
+                        BodyHandlers.ofString());
+                assertEquals(200, manage.statusCode());
+                var document = Jsoup.parse(manage.body());
+                String token = document.selectFirst("input[name=csrf]")
+                        .attr("value");
+                assertTrue(document.selectFirst("textarea[name=accounts]") != null);
+
+                var rejected = postForm(
+                        client, base.resolve("/manage/accounts"),
+                        "csrf=wrong&accounts=bluesky+alice.example");
+                assertEquals(400, rejected.statusCode());
+
+                String accounts = "# watched accounts\n" +
+                        "bluesky alice.example\n" +
+                        "mastodon @bob@example.social\n";
+                var saved = postForm(
+                        client, base.resolve("/manage/accounts"),
+                        "csrf=" + encode(token) + "&accounts=" + encode(accounts));
+                assertEquals(303, saved.statusCode());
+                assertEquals(accounts, Files.readString(store.accountsFile()));
+                assertEquals(2, store.readAccounts().size());
+
+                var scheduled = postForm(
+                        client, base.resolve("/manage/schedule"),
+                        "csrf=" + encode(token) +
+                                "&enabled=true&intervalHours=12" +
+                                "&includeMedia=true&includeVideo=true");
+                assertEquals(303, scheduled.statusCode());
+                String properties = Files.readString(store.stateDirectory()
+                        .resolve("archive-schedule.properties"));
+                assertTrue(properties.contains("enabled=true"));
+                assertTrue(properties.contains("intervalHours=12"));
+            }
+        } finally {
+            deleteTree(root);
+        }
+    }
+
     @Test
     void searchesPostsAndServesOnlyIndexedArchivedMedia() throws Exception {
         Path root = Files.createTempDirectory("warcana-server-");
@@ -580,6 +679,18 @@ class WarcanaServerTest {
                     .body(http)
                     .build());
         }
+    }
+
+    private static java.net.http.HttpResponse<String> postForm(
+            HttpClient client, URI uri, String body) throws Exception {
+        return client.send(HttpRequest.newBuilder(uri)
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .POST(HttpRequest.BodyPublishers.ofString(body))
+                        .build(), BodyHandlers.ofString());
+    }
+
+    private static String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private static void writeMediaWarc(Path path, byte[] image)

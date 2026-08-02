@@ -94,9 +94,32 @@ public class CollectionStore {
     }
 
     public List<CollectionAccount> readAccounts() throws IOException {
+        return parseAccounts(Files.readString(accountsFile(), StandardCharsets.UTF_8));
+    }
+
+    public synchronized void writeAccounts(String contents) throws IOException {
+        parseAccounts(contents);
+        Path temporary = accountsFile().resolveSibling("accounts.txt.tmp");
+        Files.writeString(
+                temporary, contents, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE);
+        try {
+            Files.move(temporary, accountsFile(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(temporary, accountsFile(),
+                    StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    static List<CollectionAccount> parseAccounts(String contents)
+            throws IOException {
         var accounts = new ArrayList<CollectionAccount>();
         int lineNumber = 0;
-        for (String raw : Files.readAllLines(accountsFile(), StandardCharsets.UTF_8)) {
+        for (String raw : contents.lines().toList()) {
             lineNumber++;
             String line = raw.strip();
             if (line.isEmpty() || line.startsWith("#")) {

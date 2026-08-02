@@ -44,7 +44,7 @@ final class CollectionHtmlRenderer {
             Map<String, String> resources,
             Map<String, SearchHit> threadTargets) {
         StringBuilder html = start("Warcana", false);
-        html.append("<header class=site-header><a href=/><strong>Warcana</strong></a></header>")
+        html.append(header())
                 .append("<main><form class=search method=get action=/>")
                 .append("<label for=q>Search posts</label>")
                 .append("<div class=search-row><input id=q name=q type=search value=\"")
@@ -195,7 +195,7 @@ final class CollectionHtmlRenderer {
             Map<String, SearchHit> threadTargets,
             String quotedUrl) {
         StringBuilder html = start("Post — Warcana", true);
-        html.append("<header class=site-header><a href=/><strong>Warcana</strong></a></header>")
+        html.append(header())
                 .append("<main><p><a id=back-link href=/>← Back</a></p>")
                 .append("<section class=thread aria-label=Thread>");
         for (SearchHit threadHit : thread) {
@@ -767,6 +767,19 @@ final class CollectionHtmlRenderer {
             html.append("<script src=/history.js defer></script>");
         }
         return html.append("</head><body>");
+    }
+
+    static String empty() {
+        return start("Warcana", false).append(header())
+                .append("<main><section class=empty-state><h1>No archived posts yet</h1>")
+                .append("<p>Add accounts and start the first capture from the management page.</p>")
+                .append("<p><a class=button href=/manage>Manage collection</a></p>")
+                .append("</section></main></body></html>").toString();
+    }
+
+    private static String header() {
+        return "<header class=site-header><a href=/><strong>Warcana</strong></a>" +
+                "<nav><a href=/>Browse</a><a href=/manage>Manage</a></nav></header>";
     }
 
     private record MediaCandidate(String url, String id) {

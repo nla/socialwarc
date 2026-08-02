@@ -26,10 +26,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-class ArchiveCommand {
+public final class ArchiveCommand {
     private static final String ARCHIVE_COMMAND = "archive";
 
-    static int run(String[] args, PrintStream out, PrintStream err) {
+    private ArchiveCommand() {
+    }
+
+    public static int run(String[] args, PrintStream out, PrintStream err) {
         try {
             ArchiveOptions options = ArchiveOptions.parse(args);
             if (options.help()) {

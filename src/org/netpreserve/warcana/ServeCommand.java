@@ -89,7 +89,7 @@ final class ServeCommand {
     private static void usage(PrintStream stream) {
         stream.println("Usage: warcana serve [options] <collection>");
         stream.println();
-        stream.println("Start a local read-only collection search interface.");
+        stream.println("Start a local collection search and management interface.");
         stream.println();
         stream.println("Options:");
         stream.println("  --host HOST       Address to bind (default: 127.0.0.1)");
