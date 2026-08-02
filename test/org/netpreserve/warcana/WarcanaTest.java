@@ -91,6 +91,70 @@ class WarcanaTest {
     }
 
     @Test
+    void archivesAndExtractsAMastodonLocalTimeline() throws Exception {
+        HttpServer server;
+        try {
+            server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        } catch (java.net.SocketException e) {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                    false, "Loopback sockets are unavailable in this sandbox");
+            return;
+        }
+        var requests = new java.util.ArrayList<String>();
+        server.createContext("/api/v1/timelines/public", exchange -> {
+            requests.add(exchange.getRequestURI().getRawQuery());
+            boolean paginated = exchange.getRequestURI().getRawQuery()
+                    .contains("max_id=100");
+            byte[] response = (paginated
+                    ? "[]"
+                    : "[" + mastodonStatusJson() + "]")
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        var temporary = Files.createTempDirectory("warcana-local-timeline-");
+        try {
+            String serverBase = "http://127.0.0.1:" +
+                    server.getAddress().getPort();
+            var warc = temporary.resolve("local.warc");
+            var extracted = temporary.resolve("local.json");
+            var stdout = new ByteArrayOutputStream();
+            var stderr = new ByteArrayOutputStream();
+
+            int archiveResult = Warcana.run(new String[]{
+                            "archive", "--quiet", "--local-timeline",
+                            "--output", warc.toString(), serverBase
+                    },
+                    new PrintStream(stdout), new PrintStream(stderr));
+
+            assertEquals(0, archiveResult, stderr.toString(StandardCharsets.UTF_8));
+            assertEquals(2, requests.size());
+            assertTrue(requests.get(0).contains("local=true"));
+            assertTrue(!requests.get(0).contains("min_id="));
+            assertTrue(requests.get(1).contains("max_id=100"));
+
+            int extractResult = Warcana.run(new String[]{
+                            "extract", "--output", extracted.toString(),
+                            warc.toString()
+                    },
+                    new PrintStream(stdout), new PrintStream(stderr));
+            assertEquals(0, extractResult, stderr.toString(StandardCharsets.UTF_8));
+            assertEquals(1, SocialJson.mapper.readTree(extracted)
+                    .get("totalHits").asInt());
+        } finally {
+            server.stop(0);
+            try (var paths = Files.walk(temporary)) {
+                for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.delete(path);
+                }
+            }
+        }
+    }
+
+    @Test
     void deserializesMastodonStatusWithJavaTimeValues() throws Exception {
         Status status = SocialJson.mapper.readValue("""
                 {

@@ -15,6 +15,7 @@ public class CollectionJob {
     public String key;
     public String platform;
     public String account;
+    public boolean localTimeline;
     public WarcStreamState posts = new WarcStreamState();
     public WarcStreamState media = new WarcStreamState();
     public WarcStreamState video = new WarcStreamState();

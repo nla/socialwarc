@@ -12,6 +12,7 @@ record ArchiveOptions(
         String account,
         Integer pageSize,
         ArchivePlatform requestedPlatform,
+        boolean localTimeline,
         boolean force,
         boolean quiet,
         boolean includeMedia,
@@ -37,6 +38,7 @@ record ArchiveOptions(
         String account = null;
         Integer pageSize = null;
         ArchivePlatform requestedPlatform = null;
+        boolean localTimeline = false;
         boolean force = false;
         boolean quiet = false;
         boolean includeMedia = false;
@@ -67,6 +69,7 @@ record ArchiveOptions(
                 case "--page-size" ->
                         pageSize = Integer.parseInt(
                                 requireValue(args, ++i, args[i - 1]));
+                case "--local-timeline" -> localTimeline = true;
                 case "--include-media" -> includeMedia = true;
                 case "--all-video-variants" -> {
                     includeMedia = true;
@@ -103,7 +106,7 @@ record ArchiveOptions(
                     }
                     if (account != null) {
                         throw new IllegalArgumentException(
-                                "Only one account may be archived at a time");
+                                "Only one target may be archived at a time");
                     }
                     account = args[i];
                 }
@@ -112,7 +115,8 @@ record ArchiveOptions(
 
         var options = new ArchiveOptions(
                 output, collection, userAgent, service, account, pageSize,
-                requestedPlatform, force, quiet, includeMedia, !excludeVideo,
+                requestedPlatform, localTimeline, force, quiet,
+                includeMedia, !excludeVideo,
                 allVideoVariants, maxMediaBytes, maxTotalMediaBytes, since,
                 until, maxPosts, maxPages, false);
         options.validate();
@@ -128,6 +132,7 @@ record ArchiveOptions(
                 null,
                 null,
                 null,
+                false,
                 false,
                 false,
                 false,
@@ -150,7 +155,7 @@ record ArchiveOptions(
 
     private void validate() {
         if (collection == null && account == null) {
-            throw new IllegalArgumentException("Missing account");
+            throw new IllegalArgumentException("Missing archive target");
         }
         if (collection != null && account != null) {
             throw new IllegalArgumentException(
@@ -159,6 +164,15 @@ record ArchiveOptions(
         if (collection != null && output != null) {
             throw new IllegalArgumentException(
                     "--output cannot be used with --collection");
+        }
+        if (collection != null && localTimeline) {
+            throw new IllegalArgumentException(
+                    "--local-timeline cannot be used with --collection; " +
+                            "use a mastodon-local entry");
+        }
+        if (localTimeline && requestedPlatform == ArchivePlatform.BLUESKY) {
+            throw new IllegalArgumentException(
+                    "--local-timeline is only valid for Mastodon");
         }
         if (!includeVideo && allVideoVariants) {
             throw new IllegalArgumentException(

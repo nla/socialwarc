@@ -27,16 +27,19 @@ class CollectionStoreTest {
             Files.writeString(store.accountsFile(), """
                     # collecting scope
                     mastodon @alice@example.social
+                    mastodon-local example.social
                     bluesky alice.bsky.social
                     @bob@elsewhere.example
                     """);
 
             var accounts = store.readAccounts();
-            assertEquals(3, accounts.size());
+            assertEquals(4, accounts.size());
             assertEquals("mastodon", accounts.get(0).platform());
             assertEquals("@alice@example.social", accounts.get(0).account());
-            assertEquals("bluesky", accounts.get(1).platform());
-            assertEquals(null, accounts.get(2).platform());
+            assertEquals("mastodon-local", accounts.get(1).platform());
+            assertTrue(accounts.get(1).localTimeline());
+            assertEquals("bluesky", accounts.get(2).platform());
+            assertEquals(null, accounts.get(3).platform());
 
             var job = new CollectionJob();
             job.key = CollectionStore.accountKey("mastodon", accounts.get(0).account());

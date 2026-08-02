@@ -75,8 +75,9 @@ public class CollectionStore {
             Files.writeString(
                     accountsFile(),
                     """
-                    # One account per line. Ambiguous handles require a platform prefix:
+                    # One target per line. Ambiguous handles require a platform prefix:
                     # mastodon @alice@example.social
+                    # mastodon-local example.social
                     # bluesky alice.bsky.social
                     """,
                     StandardCharsets.UTF_8,
@@ -130,13 +131,15 @@ public class CollectionStore {
             int separator = firstWhitespace(line);
             if (separator > 0) {
                 String candidate = line.substring(0, separator).toLowerCase(Locale.ROOT);
-                if ("mastodon".equals(candidate) || "bluesky".equals(candidate)) {
+                if ("mastodon".equals(candidate) ||
+                        "mastodon-local".equals(candidate) ||
+                        "bluesky".equals(candidate)) {
                     platform = candidate;
                     account = line.substring(separator).strip();
                 }
             }
             if (account.isBlank()) {
-                throw new IOException("Missing account in accounts.txt line " + lineNumber);
+                throw new IOException("Missing target in accounts.txt line " + lineNumber);
             }
             accounts.add(new CollectionAccount(platform, account));
         }

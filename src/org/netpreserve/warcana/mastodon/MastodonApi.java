@@ -11,4 +11,7 @@ interface MastodonApi {
 
     List<Status> getAccountStatuses(
             String accountId, String sinceId, String maxId, int limit) throws IOException;
+
+    List<Status> getPublicTimeline(
+            boolean local, String minId, String maxId, int limit) throws IOException;
 }

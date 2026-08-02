@@ -32,7 +32,7 @@ final class ManagementHtmlRenderer {
             html.append("<p class=notice>").append(escape(message)).append("</p>");
         }
         html.append("<section class=summary aria-label=\"Collection summary\">")
-                .append(metric("Configured accounts", configuredCount(accounts)))
+                .append(metric("Configured targets", configuredCount(accounts)))
                 .append(metric("Completed WARCs", warcs))
                 .append(metric("Resumable jobs", activeJobs))
                 .append("</section><div class=manage-grid><section class=panel><h2>Accounts</h2>")
@@ -80,7 +80,7 @@ final class ManagementHtmlRenderer {
             return "<p>Last finished " + TIME.format(status.finishedAt()) +
                     " with exit code " + status.exitCode() + ".</p>";
         }
-        return "<p>Capture all configured accounts into the collection now.</p>";
+        return "<p>Capture all configured targets into the collection now.</p>";
     }
 
     private static String statusBadge(ArchiveController.Status status) {

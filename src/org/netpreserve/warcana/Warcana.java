@@ -45,7 +45,7 @@ public class Warcana {
         stream.printf("  %-12s %s%n", "init",
                 "Initialize an append-only collection directory");
         stream.printf("  %-12s %s%n", "archive",
-                "Archive a Mastodon or Bluesky account to WARC");
+                "Archive a social account or Mastodon local timeline to WARC");
         stream.printf("  %-12s %s%n", "extract",
                 "Extract common-model JSON from a WARC");
         stream.printf("  %-12s %s%n", "search",

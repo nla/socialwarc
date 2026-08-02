@@ -102,11 +102,13 @@ public class MastodonClient implements MastodonApi {
         return Arrays.asList(sendRequest("/api/v1/accounts/" + accountId + "/statuses?" + params, Status[].class));
     }
 
-    public List<Status> getPublicTimeline(Boolean local, Integer limit, String minId) throws IOException {
+    public List<Status> getPublicTimeline(
+            boolean local, String minId, String maxId, int limit) throws IOException {
         var params = new Params();
         params.add("local", local);
         params.add("limit", limit);
         params.add("min_id", minId);
+        params.add("max_id", maxId);
         return Arrays.asList(sendRequest("/api/v1/timelines/public?" + params, Status[].class));
     }
 

@@ -15,6 +15,8 @@ import org.netpreserve.warcana.common.collection.CollectionWarcStream;
 import org.netpreserve.warcana.common.collection.SplitCheckpointingMediaSink;
 import org.netpreserve.warcana.mastodon.MastodonAccountArchiver;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
+import org.netpreserve.warcana.mastodon.MastodonLocalTimelineArchiver;
+import org.netpreserve.warcana.mastodon.MastodonServerReference;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -45,11 +47,15 @@ final class CollectionJobRunner {
         this.progress = progress;
     }
 
-    void run(String accountArgument, ArchivePlatform platform)
+    void run(
+            String accountArgument,
+            ArchivePlatform platform,
+            boolean localTimeline)
             throws IOException {
         String platformName = platform.externalName();
+        String targetType = localTimeline ? "mastodon-local" : platformName;
         String key = CollectionStore.accountKey(
-                platformName, accountArgument);
+                targetType, accountArgument);
         CollectionState collectionState = store.loadCollectionState();
         CollectionState.AccountProgress previous =
                 collectionState.accounts.get(key);
@@ -71,7 +77,8 @@ final class CollectionJobRunner {
         boolean resumed = job != null;
         if (job == null) {
             job = createJob(
-                    key, accountArgument, platform, previous, collectionState);
+                    key, accountArgument, platform, localTimeline,
+                    previous, collectionState);
         } else {
             resumeJob(accountArgument, job, collectionState);
         }
@@ -104,12 +111,14 @@ final class CollectionJobRunner {
             String key,
             String accountArgument,
             ArchivePlatform platform,
+            boolean localTimeline,
             CollectionState.AccountProgress previous,
             CollectionState collectionState) throws IOException {
         var job = new CollectionJob();
         job.key = key;
         job.platform = platform.externalName();
         job.account = accountArgument;
+        job.localTimeline = localTimeline;
         job.stopIdentity =
                 previous == null ? null : previous.latestIdentity;
         job.since =
@@ -224,6 +233,12 @@ final class CollectionJobRunner {
                             job.maxMediaBytes,
                             job.maxTotalMediaBytes);
             metadata.put("collection", List.of(store.root().toString()));
+            if (job.localTimeline) {
+                metadata.remove("account");
+                metadata.put("scope", List.of("local-public-timeline"));
+                metadata.put("server", List.of(
+                        MastodonServerReference.parse(accountArgument).server()));
+            }
             metadata.put(
                     "incremental-stop-identity",
                     List.of(job.stopIdentity == null
@@ -259,9 +274,15 @@ final class CollectionJobRunner {
                 store.saveJob(job);
             };
             if (platform == ArchivePlatform.MASTODON) {
-                runMastodon(
-                        accountArgument, job, mediaSink,
-                        writer, runOptions, checkpoint);
+                if (job.localTimeline) {
+                    runMastodonLocalTimeline(
+                            accountArgument, job, mediaSink,
+                            writer, runOptions, checkpoint);
+                } else {
+                    runMastodon(
+                            accountArgument, job, mediaSink,
+                            writer, runOptions, checkpoint);
+                }
             } else {
                 runBluesky(
                         accountArgument, job, mediaSink,
@@ -323,6 +344,21 @@ final class CollectionJobRunner {
                 .archive(reference.actor(), runOptions, checkpoint);
     }
 
+    private void runMastodonLocalTimeline(
+            String serverArgument,
+            CollectionJob job,
+            SplitCheckpointingMediaSink mediaSink,
+            RollingCollectionWarcWriter writer,
+            ArchiveRunOptions runOptions,
+            ArchiveCheckpoint checkpoint) throws IOException {
+        MastodonServerReference reference =
+                MastodonServerReference.parse(serverArgument);
+        new MastodonLocalTimelineArchiver(
+                reference.server(), job.userAgent, writer, job.pageSize,
+                mediaSink, progress, job.includeVideo)
+                .archive(runOptions, checkpoint);
+    }
+
     private SplitCheckpointingMediaSink mediaSink(
             CollectionJob job,
             CollectionState collectionState,
@@ -368,7 +404,9 @@ final class CollectionJobRunner {
             CollectionState collectionState, CollectionJob job)
             throws IOException {
         var progress = new CollectionState.AccountProgress();
-        progress.platform = job.platform;
+        progress.platform = job.localTimeline
+                ? "mastodon-local"
+                : job.platform;
         progress.account = job.account;
         CollectionState.AccountProgress previous =
                 collectionState.accounts.get(job.key);

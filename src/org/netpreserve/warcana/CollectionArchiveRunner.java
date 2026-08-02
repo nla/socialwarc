@@ -41,7 +41,7 @@ final class CollectionArchiveRunner {
         List<CollectionAccount> accounts = store.readAccounts();
         if (accounts.isEmpty()) {
             throw new IllegalArgumentException(
-                    "Collection has no accounts; edit " + store.accountsFile());
+                    "Collection has no targets; edit " + store.accountsFile());
         }
 
         try (var lockChannel = FileChannel.open(
@@ -71,7 +71,10 @@ final class CollectionArchiveRunner {
             CollectionAccount candidate = ordered.get(i);
             ArchivePlatform platform = platform(candidate);
             String key = CollectionStore.accountKey(
-                    platform.externalName(), candidate.account());
+                    candidate.localTimeline()
+                            ? "mastodon-local"
+                            : platform.externalName(),
+                    candidate.account());
             if (Files.exists(store.jobFile(key))) {
                 if (i > 0) {
                     ordered.remove(i);
@@ -96,7 +99,9 @@ final class CollectionArchiveRunner {
                 continue;
             }
             try {
-                jobRunner.run(configured.account(), platform);
+                jobRunner.run(
+                        configured.account(), platform,
+                        configured.localTimeline());
                 succeeded++;
             } catch (IOException | RuntimeException e) {
                 failed++;
@@ -118,6 +123,9 @@ final class CollectionArchiveRunner {
     }
 
     private ArchivePlatform platform(CollectionAccount account) {
+        if (account.localTimeline()) {
+            return ArchivePlatform.MASTODON;
+        }
         if (account.platform() != null) {
             return ArchivePlatform.parse(account.platform());
         }

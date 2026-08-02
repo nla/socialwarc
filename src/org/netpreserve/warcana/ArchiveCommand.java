@@ -13,6 +13,8 @@ import org.netpreserve.warcana.common.MediaSink;
 import org.netpreserve.warcana.common.ProgressReporter;
 import org.netpreserve.warcana.mastodon.MastodonAccountArchiver;
 import org.netpreserve.warcana.mastodon.MastodonAccountReference;
+import org.netpreserve.warcana.mastodon.MastodonLocalTimelineArchiver;
+import org.netpreserve.warcana.mastodon.MastodonServerReference;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -56,7 +58,9 @@ public final class ArchiveCommand {
     private static void archiveAccount(
             ArchiveOptions options, PrintStream out, PrintStream err)
             throws IOException {
-        ArchivePlatform platform = options.platformFor(options.account());
+        ArchivePlatform platform = options.localTimeline()
+                ? ArchivePlatform.MASTODON
+                : options.platformFor(options.account());
         ProgressReporter progress = options.quiet()
                 ? ProgressReporter.NONE
                 : err::println;
@@ -70,11 +74,41 @@ public final class ArchiveCommand {
                 null,
                 0,
                 0);
-        if (platform == ArchivePlatform.MASTODON) {
+        if (options.localTimeline()) {
+            archiveMastodonLocalTimeline(options, runOptions, progress, out);
+        } else if (platform == ArchivePlatform.MASTODON) {
             archiveMastodon(options, runOptions, progress, out);
         } else {
             archiveBluesky(options, runOptions, progress, out);
         }
+    }
+
+    private static void archiveMastodonLocalTimeline(
+            ArchiveOptions options,
+            ArchiveRunOptions runOptions,
+            ProgressReporter progress,
+            PrintStream out) throws IOException {
+        if (options.service() != null) {
+            throw new IllegalArgumentException(
+                    "--service is only valid for Bluesky");
+        }
+        int pageSize = options.pageSize() == null ? 40 : options.pageSize();
+        MastodonServerReference reference =
+                MastodonServerReference.parse(options.account());
+        Path output = chooseOutput(
+                options.output(), reference.defaultFilename(), options.force());
+        Path temporary = temporaryOutput(output);
+        var result = archiveMastodonLocalTimeline(
+                reference, temporary, output.getFileName().toString(),
+                options.userAgent(), pageSize, options.includeMedia(),
+                options.includeVideo(), options.allVideoVariants(),
+                options.maxMediaBytes(), options.maxTotalMediaBytes(),
+                progress, runOptions);
+        moveCompletedWarc(temporary, output, options.force());
+        out.printf("Archived %d local statuses from %s to %s%n",
+                result.statusesArchived(), reference.server(),
+                output.toAbsolutePath());
+        printMediaSummary(out, options.includeMedia(), result.media());
     }
 
     private static void archiveMastodon(
@@ -261,6 +295,45 @@ public final class ArchiveCommand {
         }
     }
 
+    private static MastodonLocalTimelineArchiver.ArchiveResult
+            archiveMastodonLocalTimeline(
+                    MastodonServerReference reference,
+                    Path output,
+                    String warcFilename,
+                    String userAgent,
+                    int pageSize,
+                    boolean includeMedia,
+                    boolean includeVideo,
+                    boolean allVideoVariants,
+                    long maxMediaBytes,
+                    long maxTotalMediaBytes,
+                    ProgressReporter progress,
+                    ArchiveRunOptions options) throws IOException {
+        Map<String, List<String>> metadata = archiveMetadata(
+                userAgent, "mastodon", reference.server(), includeMedia,
+                includeVideo, allVideoVariants, maxMediaBytes,
+                maxTotalMediaBytes);
+        metadata.remove("account");
+        metadata.put("scope", List.of("local-public-timeline"));
+        metadata.put("server", List.of(reference.server()));
+
+        try (var warcWriter = new WarcWriter(output)) {
+            warcWriter.write(new Warcinfo.Builder()
+                    .filename(warcFilename)
+                    .fields(metadata)
+                    .build());
+            MediaSink mediaSink = includeMedia
+                    ? new MediaCapturer(
+                            warcWriter, userAgent, maxMediaBytes,
+                            maxTotalMediaBytes, allVideoVariants, progress)
+                    : null;
+            return new MastodonLocalTimelineArchiver(
+                    reference.server(), userAgent, warcWriter, pageSize,
+                    mediaSink, progress, includeVideo)
+                    .archive(options, ArchiveCheckpoint.NONE);
+        }
+    }
+
     private static BlueskyAccountArchiver.ArchiveResult archiveBluesky(
             BlueskyAccountReference reference,
             Path output,
@@ -375,13 +448,15 @@ public final class ArchiveCommand {
     private static void archiveUsage(PrintStream stream) {
         stream.println(
                 "Usage: warcana " + ARCHIVE_COMMAND +
-                        " [options] ACCOUNT");
+                        " [options] TARGET");
         stream.println(
                 "       warcana " + ARCHIVE_COMMAND +
                         " --collection DIRECTORY [options]");
         stream.println();
         stream.println(
-                "Archives a Mastodon or Bluesky account.");
+                "Archives a Mastodon or Bluesky account, or a Mastodon local timeline.");
+        stream.println(
+                "Use --local-timeline to archive posts originating on a Mastodon server.");
         stream.println(
                 "Use --platform when an account handle is ambiguous.");
         stream.println();
@@ -398,6 +473,8 @@ public final class ArchiveCommand {
                         ArchiveOptions.DEFAULT_USER_AGENT + ")");
         stream.println(
                 "  --page-size NUMBER     Items per API request");
+        stream.println(
+                "  --local-timeline       Archive a Mastodon server's local public timeline");
         stream.println(
                 "  --service URL          Bluesky AT Protocol AppView");
         stream.println(

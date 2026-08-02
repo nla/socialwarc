@@ -1,7 +1,8 @@
 # Warcana
 
-Warcana archives public Mastodon and Bluesky accounts to WARC, captures linked
-media, extracts a common social-post model, and provides full-text search.
+Warcana archives public Mastodon and Bluesky accounts and Mastodon local
+public timelines to WARC, captures linked media, extracts a common social-post
+model, and provides full-text search.
 
 It requires Java 21 or newer.
 
@@ -34,12 +35,13 @@ collection/
     └── jobs/              resumable in-progress jobs
 ```
 
-Add one account per line to `accounts.txt`. Blank lines and lines beginning
+Add one target per line to `accounts.txt`. Blank lines and lines beginning
 with `#` are ignored. Use a platform prefix for handles that cannot be
 identified unambiguously:
 
 ```text
 mastodon @alice@example.social
+mastodon-local example.social
 bluesky alice.bsky.social
 ```
 
@@ -64,7 +66,7 @@ Each stream closes at the next complete HTTP exchange boundary after reaching
 1 GiB. Media and video WARCs are created lazily only when the run discovers
 resources of that type. Completed WARCs are never modified. On later runs,
 Warcana fetches the newest pages until it reaches the last identity recorded
-for each account.
+for each target.
 
 While a job is running, its active WARCs have a `.open` suffix and their state is
 checkpointed in `state/jobs/`. After an interruption, rerunning the same
@@ -151,5 +153,19 @@ java -jar target/warcana-0.1.0.jar archive \
   -o alice.warc \
   @alice@example.social
 ```
+
+Archive the public posts originating on one Mastodon server with the local
+timeline endpoint:
+
+```sh
+java -jar target/warcana-0.1.0.jar archive \
+  --local-timeline \
+  --include-media \
+  -o example-social-local.warc \
+  example.social
+```
+
+This captures the local public timeline exposed by the server. It does not
+include followers-only, direct, or other non-public posts.
 
 Use `archive --help`, `search --help`, or `extract --help` for all options.

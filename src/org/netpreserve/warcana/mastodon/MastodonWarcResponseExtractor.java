@@ -25,7 +25,9 @@ public class MastodonWarcResponseExtractor implements WarcResponseExtractor {
             return false;
         }
         String path = response.targetURI().getPath();
-        return path != null && path.matches("^/api/v1/accounts/[^/]+/statuses/?$");
+        return path != null &&
+                (path.matches("^/api/v1/accounts/[^/]+/statuses/?$") ||
+                path.matches("^/api/v1/timelines/public/?$"));
     }
 
     @Override
