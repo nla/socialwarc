@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.function.Consumer;
 
 /**
  * Checkpoints non-video media and video to independent WARC streams.
@@ -29,6 +30,7 @@ public class SplitCheckpointingMediaSink implements MediaSink, AutoCloseable {
     private final long maxTotalBytes;
     private final boolean allVideoVariants;
     private final ProgressReporter progress;
+    private final Consumer<CollectionJob> checkpointListener;
     private WarcWriter mediaWriter;
     private WarcWriter videoWriter;
     private MediaCapturer mediaCapturer;
@@ -43,7 +45,8 @@ public class SplitCheckpointingMediaSink implements MediaSink, AutoCloseable {
             long maxResourceBytes,
             long maxTotalBytes,
             boolean allVideoVariants,
-            ProgressReporter progress) {
+            ProgressReporter progress,
+            Consumer<CollectionJob> checkpointListener) {
         this.store = store;
         this.job = job;
         this.mediaWriterFactory = mediaWriterFactory;
@@ -53,6 +56,7 @@ public class SplitCheckpointingMediaSink implements MediaSink, AutoCloseable {
         this.maxTotalBytes = maxTotalBytes;
         this.allVideoVariants = allVideoVariants;
         this.progress = progress;
+        this.checkpointListener = checkpointListener;
     }
 
     @Override
@@ -221,6 +225,7 @@ public class SplitCheckpointingMediaSink implements MediaSink, AutoCloseable {
     private void checkpoint() {
         try {
             store.saveJob(job);
+            checkpointListener.accept(job);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

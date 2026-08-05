@@ -30,6 +30,7 @@ import tools.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
@@ -48,6 +49,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.GZIPOutputStream;
 
 /**
  * Read-only HTTP interface for searching and viewing a collection.
@@ -55,6 +57,8 @@ import java.util.regex.Pattern;
 public final class SocialWarcServer implements AutoCloseable {
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PLAYLIST_BYTES = 8 * 1024 * 1024;
+    private static final String STATIC_CACHE_CONTROL =
+            "public, max-age=86400";
     private static final Pattern PLAYLIST_URI = Pattern.compile(
             "URI=(?:\"([^\"]*)\"|([^,\\s]*))");
     private static final String CSP = "default-src 'self'; " +
@@ -849,19 +853,19 @@ public final class SocialWarcServer implements AutoCloseable {
             HttpExchange exchange, String name, String contentType)
             throws IOException {
         requireGet(exchange);
-        String resource = "/org/netpreserve/socialwarc/web/" + name;
-        try (InputStream input = SocialWarcServer.class.getResourceAsStream(resource)) {
-            if (input == null) {
-                error(exchange, 404, "Interface resource not found");
-                return;
-            }
-            byte[] bytes = input.readAllBytes();
-            exchange.getResponseHeaders().set("Content-Type", contentType);
-            exchange.getResponseHeaders().set(
-                    "Cache-Control", "no-cache");
-            exchange.sendResponseHeaders(200, bytes.length);
-            exchange.getResponseBody().write(bytes);
+        WebAssets.Asset asset = WebAssets.get(name);
+        Headers headers = exchange.getResponseHeaders();
+        headers.set("Content-Type", contentType);
+        headers.set("Cache-Control", STATIC_CACHE_CONTROL);
+        headers.set("ETag", asset.etag());
+        headers.set("Vary", "Accept-Encoding");
+        if (etagMatches(
+                exchange.getRequestHeaders().getFirst("If-None-Match"),
+                asset.etag())) {
+            exchange.sendResponseHeaders(304, -1);
+            return;
         }
+        sendBytes(exchange, 200, asset.bytes(), true);
     }
 
     private static void html(HttpExchange exchange, int status, String value)
@@ -870,8 +874,7 @@ public final class SocialWarcServer implements AutoCloseable {
         exchange.getResponseHeaders().set(
                 "Content-Type", "text/html; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-store");
-        exchange.sendResponseHeaders(status, bytes.length);
-        exchange.getResponseBody().write(bytes);
+        sendBytes(exchange, status, bytes, true);
     }
 
     private static void json(HttpExchange exchange, int status, Object value)
@@ -881,8 +884,75 @@ public final class SocialWarcServer implements AutoCloseable {
         exchange.getResponseHeaders().set(
                 "Content-Type", "application/json; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-store");
-        exchange.sendResponseHeaders(status, bytes.length);
-        exchange.getResponseBody().write(bytes);
+        sendBytes(exchange, status, bytes, true);
+    }
+
+    private static void sendBytes(
+            HttpExchange exchange, int status, byte[] bytes,
+            boolean compressible) throws IOException {
+        byte[] response = bytes;
+        if (compressible) {
+            exchange.getResponseHeaders().set("Vary", "Accept-Encoding");
+            if (acceptsGzip(exchange)) {
+                response = gzip(bytes);
+                exchange.getResponseHeaders().set("Content-Encoding", "gzip");
+            }
+        }
+        exchange.sendResponseHeaders(status, response.length);
+        exchange.getResponseBody().write(response);
+    }
+
+    private static boolean acceptsGzip(HttpExchange exchange) {
+        String value = exchange.getRequestHeaders().getFirst("Accept-Encoding");
+        if (value == null) {
+            return false;
+        }
+        Double gzip = null;
+        Double wildcard = null;
+        for (String item : value.split(",")) {
+            String[] parameters = item.trim().split(";");
+            String coding = parameters[0].trim().toLowerCase(java.util.Locale.ROOT);
+            double quality = 1;
+            for (int i = 1; i < parameters.length; i++) {
+                String parameter = parameters[i].trim();
+                if (parameter.regionMatches(true, 0, "q=", 0, 2)) {
+                    try {
+                        quality = Double.parseDouble(parameter.substring(2));
+                        if (quality < 0 || quality > 1) {
+                            quality = 0;
+                        }
+                    } catch (NumberFormatException e) {
+                        quality = 0;
+                    }
+                }
+            }
+            if ("gzip".equals(coding)) {
+                gzip = quality;
+            } else if ("*".equals(coding)) {
+                wildcard = quality;
+            }
+        }
+        return gzip != null ? gzip > 0 : wildcard != null && wildcard > 0;
+    }
+
+    private static byte[] gzip(byte[] bytes) throws IOException {
+        var output = new ByteArrayOutputStream();
+        try (var gzip = new GZIPOutputStream(output)) {
+            gzip.write(bytes);
+        }
+        return output.toByteArray();
+    }
+
+    private static boolean etagMatches(String header, String etag) {
+        if (header == null) {
+            return false;
+        }
+        for (String candidate : header.split(",")) {
+            if ("*".equals(candidate.trim()) || etag.equals(candidate.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void error(
@@ -891,7 +961,8 @@ public final class SocialWarcServer implements AutoCloseable {
         String safe = org.jsoup.nodes.Entities.escape(message);
         html(exchange, status,
                 "<!doctype html><html><head><meta charset=utf-8>" +
-                        "<title>Error</title><link rel=stylesheet href=/app.css>" +
+                        "<title>Error</title><link rel=stylesheet href=" +
+                        WebAssets.path("app.css") + ">" +
                         "</head><body><main><h1>Error</h1><p>" + safe +
                         "</p><p><a href=/>Home</a></p></main></body></html>");
     }

@@ -124,7 +124,9 @@ final class CollectionHtmlRenderer {
         }
         html.append(pagination(query, totalHits, hits.size()))
                 .append("</section></main>")
-                .append("<script src=/timeline.js defer></script>")
+                .append("<script src=")
+                .append(WebAssets.path("timeline.js"))
+                .append(" defer></script>")
                 .append("</body></html>");
         return html.toString();
     }
@@ -809,9 +811,12 @@ final class CollectionHtmlRenderer {
                 "<!doctype html><html lang=en><head><meta charset=utf-8>")
                 .append("<meta name=viewport content=\"width=device-width,initial-scale=1\">")
                 .append("<title>").append(escape(title)).append("</title>")
-                .append("<link rel=stylesheet href=/app.css>");
+                .append("<link rel=stylesheet href=")
+                .append(WebAssets.path("app.css")).append(">");
         if (historyScript) {
-            html.append("<script src=/history.js defer></script>");
+            html.append("<script src=")
+                    .append(WebAssets.path("history.js"))
+                    .append(" defer></script>");
         }
         return html.append("</head><body>");
     }

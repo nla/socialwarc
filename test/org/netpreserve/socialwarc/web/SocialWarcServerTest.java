@@ -9,6 +9,7 @@ import org.netpreserve.jwarc.WarcResponse;
 import org.netpreserve.jwarc.WarcWriter;
 import org.netpreserve.socialwarc.common.ProgressReporter;
 import org.netpreserve.socialwarc.common.SocialJson;
+import org.netpreserve.socialwarc.common.collection.CollectionState;
 import org.netpreserve.socialwarc.common.collection.CollectionStore;
 import org.netpreserve.socialwarc.common.model.Account;
 import org.netpreserve.socialwarc.common.model.Attachment;
@@ -17,6 +18,8 @@ import org.netpreserve.socialwarc.common.resource.WarcResourceIndex;
 import org.netpreserve.socialwarc.common.search.SearchHit;
 
 import java.io.PrintStream;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.net.URI;
@@ -31,12 +34,116 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.GZIPInputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SocialWarcServerTest {
+    @Test
+    void cachesStaticAssetsAndCompressesHtml() throws Exception {
+        Path root = Files.createTempDirectory("socialwarc-http-response-");
+        try {
+            var store = new CollectionStore(root);
+            store.initialize();
+            SocialWarcServer created;
+            try {
+                created = new SocialWarcServer(
+                        root, new InetSocketAddress("127.0.0.1", 0),
+                        false, ProgressReporter.NONE);
+            } catch (SocketException e) {
+                Assumptions.assumeTrue(
+                        false, "Loopback sockets are unavailable in this sandbox");
+                return;
+            }
+            try (var server = created;
+                 var client = HttpClient.newHttpClient()) {
+                server.start();
+                URI base = server.baseUri();
+
+                var compressed = client.send(
+                        HttpRequest.newBuilder(base)
+                                .header("Accept-Encoding", "br, gzip")
+                                .build(),
+                        BodyHandlers.ofByteArray());
+                assertEquals(200, compressed.statusCode());
+                assertEquals("gzip", compressed.headers()
+                        .firstValue("Content-Encoding").orElseThrow());
+                assertTrue(compressed.headers().firstValue("Vary")
+                        .orElseThrow().contains("Accept-Encoding"));
+                String compressedHtml = gunzip(compressed.body());
+                assertTrue(compressedHtml.contains("No archived posts yet"));
+                String stylesheet = Jsoup.parse(compressedHtml)
+                        .selectFirst("link[rel=stylesheet]").attr("href");
+                assertTrue(stylesheet.matches(
+                        "/app\\.css\\?v=[0-9a-f]{16}"));
+
+                var identity = client.send(
+                        HttpRequest.newBuilder(base.resolve(stylesheet)).build(),
+                        BodyHandlers.ofByteArray());
+                assertEquals(200, identity.statusCode());
+                assertEquals("public, max-age=86400", identity.headers()
+                        .firstValue("Cache-Control").orElseThrow());
+                String etag = identity.headers().firstValue("ETag").orElseThrow();
+                assertTrue(!etag.isBlank());
+
+                var compressedAsset = client.send(
+                        HttpRequest.newBuilder(base.resolve(stylesheet))
+                                .header("Accept-Encoding", "gzip")
+                                .build(),
+                        BodyHandlers.ofByteArray());
+                assertEquals("gzip", compressedAsset.headers()
+                        .firstValue("Content-Encoding").orElseThrow());
+                assertTrue(gunzip(compressedAsset.body()).contains(":root"));
+
+                var unchanged = client.send(
+                        HttpRequest.newBuilder(base.resolve(stylesheet))
+                                .header("If-None-Match", etag)
+                                .build(),
+                        BodyHandlers.ofByteArray());
+                assertEquals(304, unchanged.statusCode());
+                assertEquals(0, unchanged.body().length);
+
+                var gzipDisabled = client.send(
+                        HttpRequest.newBuilder(base)
+                                .header("Accept-Encoding", "gzip;q=0, *;q=1")
+                                .build(),
+                        BodyHandlers.ofByteArray());
+                assertTrue(gzipDisabled.headers()
+                        .firstValue("Content-Encoding").isEmpty());
+            }
+        } finally {
+            deleteTree(root);
+        }
+    }
+
+    @Test
+    void displaysStatisticsForRunningCapture() {
+        var settings = new ArchiveController.Settings(
+                "socialwarc/0.1.0", false, 24, true, true);
+        var progress = new ArchiveController.Progress(
+                4, 1, 1, 1, 1, 37, 3,
+                8, 1, 2, 5, 2, 0, 1, 3, 1536);
+        var status = new ArchiveController.Status(
+                true, Instant.now().minusSeconds(65), null, null, null,
+                settings, List.of("Capturing target"), progress,
+                false, List.of());
+
+        var document = Jsoup.parse(ManagementHtmlRenderer.page(
+                "", status, "token", 0, 0, new CollectionState(), null));
+
+        assertEquals("37", document.selectFirst("[data-stat=posts] strong").text());
+        assertEquals("8", document.selectFirst("[data-stat=media] strong").text());
+        assertEquals("8", document.selectFirst("[data-stat=queued] strong").text());
+        assertEquals("1.5 KiB",
+                document.selectFirst("[data-stat=bytes] strong").text());
+        assertTrue(document.selectFirst(".capture-progress").text()
+                .contains("Running for 1m"));
+        assertEquals("3", document.selectFirst("meta[http-equiv=refresh]")
+                .attr("content"));
+    }
+
     @Test
     void captureLogKeepsFormattedOutputOnOneLine() throws Exception {
         Path root = Files.createTempDirectory("socialwarc-log-");
@@ -239,7 +346,7 @@ class SocialWarcServerTest {
                             pageDocument.selectFirst(".timeline")
                                     .attr("data-start"));
                     assertTrue(page.body().contains(
-                            "<script src=/timeline.js defer></script>"));
+                            "<script src=/timeline.js?v="));
 
                     var search = client.send(
                             HttpRequest.newBuilder(
@@ -291,7 +398,7 @@ class SocialWarcServerTest {
                     assertEquals(200, detail.statusCode());
                     assertTrue(detail.body().contains("id=back-link"));
                     assertTrue(detail.body().contains(
-                            "<script src=/history.js defer></script>"));
+                            "<script src=/history.js?v="));
                     var detailDocument = Jsoup.parse(detail.body());
                     assertEquals(
                             2,
@@ -760,6 +867,12 @@ class SocialWarcServerTest {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private static String gunzip(byte[] bytes) throws IOException {
+        try (var input = new GZIPInputStream(new ByteArrayInputStream(bytes))) {
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 
     private static void writeMediaWarc(Path path, byte[] image)

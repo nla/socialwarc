@@ -83,6 +83,41 @@ main {
 .run-status[data-state="complete"] i { background: #175c92; }
 .run-status[data-state="needs-attention"] i { background: #b42318; }
 
+.capture-progress {
+  margin: .55rem 0 .75rem;
+}
+
+.capture-progress header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: .5rem;
+  margin-bottom: .4rem;
+}
+
+.capture-progress header span,
+.capture-statistics small { color: #666; font-size: .78rem; }
+
+.capture-statistics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .4rem;
+}
+
+.capture-statistics > div {
+  min-width: 0;
+  padding: .45rem;
+  border: 1px solid #ddd;
+  border-radius: .3rem;
+  background: #fafafa;
+}
+
+.capture-statistics strong,
+.capture-statistics span,
+.capture-statistics small { display: block; }
+.capture-statistics strong { font-size: 1.15rem; }
+.capture-statistics span { font-size: .82rem; }
+
 .notice {
   padding: .55rem .7rem;
   border-left: 3px solid #175c92;

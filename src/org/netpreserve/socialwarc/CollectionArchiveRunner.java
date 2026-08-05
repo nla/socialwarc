@@ -22,9 +22,11 @@ final class CollectionArchiveRunner {
     private final PrintStream err;
     private final CollectionStore store;
     private final ProgressReporter progress;
+    private final ArchiveCommand.ProgressListener progressListener;
 
     CollectionArchiveRunner(
-            ArchiveOptions options, PrintStream out, PrintStream err) {
+            ArchiveOptions options, PrintStream out, PrintStream err,
+            ArchiveCommand.ProgressListener progressListener) {
         this.options = options;
         this.out = out;
         this.err = err;
@@ -32,6 +34,7 @@ final class CollectionArchiveRunner {
         progress = options.quiet()
                 ? ProgressReporter.NONE
                 : err::println;
+        this.progressListener = progressListener;
     }
 
     int run() throws IOException {
@@ -70,8 +73,8 @@ final class CollectionArchiveRunner {
                 store, options, progress);
              var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var jobRunner = new CollectionJobRunner(
-                    store, options, out, progress, writers);
-            var futures = new java.util.ArrayList<Future<AccountResult>>();
+                    store, options, out, progress, writers, progressListener);
+            var scheduled = new java.util.ArrayList<ScheduledAccount>();
             for (CollectionAccount configured : accounts) {
                 ArchivePlatform platform = platform(configured);
                 if (isFilteredOut(configured, platform)) {
@@ -84,6 +87,13 @@ final class CollectionArchiveRunner {
                             configured.account());
                     continue;
                 }
+                scheduled.add(new ScheduledAccount(configured, platform));
+            }
+            progressListener.targetsScheduled(scheduled.size());
+            var futures = new java.util.ArrayList<Future<AccountResult>>();
+            for (ScheduledAccount task : scheduled) {
+                CollectionAccount configured = task.account();
+                ArchivePlatform platform = task.platform();
                 futures.add(executor.submit(() -> {
                     try {
                         jobRunner.run(
@@ -98,6 +108,11 @@ final class CollectionArchiveRunner {
                         } catch (IOException stateFailure) {
                             e.addSuppressed(stateFailure);
                         }
+                        progressListener.targetFailed(CollectionStore.accountKey(
+                                configured.localTimeline()
+                                        ? "mastodon-local"
+                                        : platform.externalName(),
+                                configured.account()));
                         return new AccountResult(configured, platform, e);
                     }
                 }));
@@ -168,5 +183,9 @@ final class CollectionArchiveRunner {
             CollectionAccount account,
             ArchivePlatform platform,
             Throwable failure) {
+    }
+
+    private record ScheduledAccount(
+            CollectionAccount account, ArchivePlatform platform) {
     }
 }

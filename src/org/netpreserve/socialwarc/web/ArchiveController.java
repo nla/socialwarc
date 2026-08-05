@@ -20,8 +20,12 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -42,8 +46,16 @@ final class ArchiveController implements AutoCloseable {
 
     record Status(boolean running, Instant startedAt, Instant finishedAt,
                   Integer exitCode, Instant nextRun, Settings settings,
-                  List<String> output, boolean bambooEnabled,
+                  List<String> output, Progress progress, boolean bambooEnabled,
                   List<BambooBatchStatus> bambooBatches) {
+    }
+
+    record Progress(
+            int targets, int targetsCompleted, int targetsFailed,
+            int targetsActive, int targetsQueued, int posts, int pages,
+            int mediaCaptured, int mediaFailed, int mediaSkipped,
+            int mediaQueued, int videoCaptured, int videoFailed,
+            int videoSkipped, int videoQueued, long bytes) {
     }
 
     record BambooBatchStatus(
@@ -56,6 +68,45 @@ final class ArchiveController implements AutoCloseable {
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor();
     private final ArrayDeque<String> output = new ArrayDeque<>();
+    private final Map<String, ArchiveCommand.TargetProgress> targetProgress =
+            new HashMap<>();
+    private final Set<String> completedTargets = new HashSet<>();
+    private final Set<String> failedTargets = new HashSet<>();
+    private final ArchiveCommand.ProgressListener progressListener =
+            new ArchiveCommand.ProgressListener() {
+                @Override
+                public void targetsScheduled(int targets) {
+                    synchronized (ArchiveController.this) {
+                        scheduledTargets = targets;
+                    }
+                }
+
+                @Override
+                public void targetUpdated(
+                        ArchiveCommand.TargetProgress progress) {
+                    synchronized (ArchiveController.this) {
+                        targetProgress.put(progress.key(), progress);
+                    }
+                }
+
+                @Override
+                public void targetCompleted(
+                        ArchiveCommand.TargetProgress progress) {
+                    synchronized (ArchiveController.this) {
+                        targetProgress.put(progress.key(), progress);
+                        failedTargets.remove(progress.key());
+                        completedTargets.add(progress.key());
+                    }
+                }
+
+                @Override
+                public void targetFailed(String key) {
+                    synchronized (ArchiveController.this) {
+                        completedTargets.remove(key);
+                        failedTargets.add(key);
+                    }
+                }
+            };
     private final BambooIngestWorker bambooWorker;
     private Settings settings;
     private Future<?> run;
@@ -66,6 +117,7 @@ final class ArchiveController implements AutoCloseable {
     private Instant finishedAt;
     private Instant nextRun;
     private Integer exitCode;
+    private int scheduledTargets;
 
     ArchiveController(CollectionStore store) throws IOException {
         this(store, null);
@@ -100,6 +152,10 @@ final class ArchiveController implements AutoCloseable {
         startedAt = Instant.now();
         finishedAt = null;
         exitCode = null;
+        targetProgress.clear();
+        completedTargets.clear();
+        failedTargets.clear();
+        scheduledTargets = 0;
         append("Starting capture");
         run = runner.submit(this::execute);
         return true;
@@ -135,7 +191,7 @@ final class ArchiveController implements AutoCloseable {
         return new Status(
                 running, startedAt, finishedAt,
                 exitCode, nextRun, settings, List.copyOf(output),
-                bambooWorker != null, bambooStatus());
+                progress(), bambooWorker != null, bambooStatus());
     }
 
     private List<BambooBatchStatus> bambooStatus() {
@@ -156,6 +212,44 @@ final class ArchiveController implements AutoCloseable {
                     "outbox", "unreadable", 0, 0, 0,
                     e.getMessage(), null));
         }
+    }
+
+    private Progress progress() {
+        int active = (int) targetProgress.keySet().stream()
+                .filter(key -> !completedTargets.contains(key) &&
+                        !failedTargets.contains(key))
+                .count();
+        int finished = completedTargets.size() + failedTargets.size();
+        int queued = Math.max(0, scheduledTargets - finished - active);
+        int posts = 0;
+        int pages = 0;
+        int mediaCaptured = 0;
+        int mediaFailed = 0;
+        int mediaSkipped = 0;
+        int mediaQueued = 0;
+        int videoCaptured = 0;
+        int videoFailed = 0;
+        int videoSkipped = 0;
+        int videoQueued = 0;
+        long bytes = 0;
+        for (ArchiveCommand.TargetProgress target : targetProgress.values()) {
+            posts += target.posts();
+            pages += target.pages();
+            mediaCaptured += target.mediaCaptured();
+            mediaFailed += target.mediaFailed();
+            mediaSkipped += target.mediaSkipped();
+            mediaQueued += target.mediaQueued();
+            videoCaptured += target.videoCaptured();
+            videoFailed += target.videoFailed();
+            videoSkipped += target.videoSkipped();
+            videoQueued += target.videoQueued();
+            bytes += target.mediaBytes() + target.videoBytes();
+        }
+        return new Progress(
+                scheduledTargets, completedTargets.size(), failedTargets.size(),
+                active, queued, posts, pages,
+                mediaCaptured, mediaFailed, mediaSkipped, mediaQueued,
+                videoCaptured, videoFailed, videoSkipped, videoQueued, bytes);
     }
 
     private void execute() {
@@ -181,7 +275,9 @@ final class ArchiveController implements AutoCloseable {
                     arguments.add("--exclude-video");
                 }
             }
-            result = ArchiveCommand.run(arguments.toArray(String[]::new), sink, sink);
+            result = ArchiveCommand.run(
+                    arguments.toArray(String[]::new), sink, sink,
+                    progressListener);
         } catch (RuntimeException e) {
             append("Capture failed: " + e.getMessage());
             result = 1;

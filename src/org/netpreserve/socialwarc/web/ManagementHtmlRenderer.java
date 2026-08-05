@@ -3,8 +3,11 @@ package org.netpreserve.socialwarc.web;
 import org.jsoup.nodes.Entities;
 import org.netpreserve.socialwarc.common.collection.CollectionState;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 
 final class ManagementHtmlRenderer {
     private static final DateTimeFormatter TIME = DateTimeFormatter
@@ -21,7 +24,8 @@ final class ManagementHtmlRenderer {
         var html = new StringBuilder("<!doctype html><html lang=en><head>")
                 .append("<meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">")
                 .append("<title>Manage collection · SocialWARC</title>")
-                .append("<link rel=stylesheet href=/app.css>");
+                .append("<link rel=stylesheet href=")
+                .append(WebAssets.path("app.css")).append(">");
         if (status.running()) {
             html.append("<meta http-equiv=refresh content=3>");
         }
@@ -83,14 +87,92 @@ final class ManagementHtmlRenderer {
 
     private static String runDetails(ArchiveController.Status status) {
         if (status.running()) {
-            return "<p>Started " + TIME.format(status.startedAt()) +
-                    ". This page refreshes every three seconds.</p>";
+            return captureProgress(
+                    status.progress(), status.startedAt(), null) +
+                    "<p class=hint>Started " + TIME.format(status.startedAt()) +
+                    ".</p>";
         }
         if (status.finishedAt() != null) {
-            return "<p>Last finished " + TIME.format(status.finishedAt()) +
-                    " with exit code " + status.exitCode() + ".</p>";
+            return captureProgress(
+                    status.progress(), status.startedAt(), status.finishedAt()) +
+                    "<p class=hint>Last finished " +
+                    TIME.format(status.finishedAt()) + " with exit code " +
+                    status.exitCode() + ".</p>";
         }
         return "<p>Capture all configured targets into the collection now.</p>";
+    }
+
+    private static String captureProgress(
+            ArchiveController.Progress progress, Instant startedAt,
+            Instant finishedAt) {
+        int processed = progress.targetsCompleted() + progress.targetsFailed();
+        int resourcesQueued = progress.mediaQueued() + progress.videoQueued();
+        return new StringBuilder("<div class=capture-progress role=status>")
+                .append("<header><strong>")
+                .append(finishedAt == null
+                        ? "Live capture statistics"
+                        : "Last capture statistics")
+                .append("</strong><span>")
+                .append(finishedAt == null ? "Running for " : "Finished after ")
+                .append(elapsed(startedAt, finishedAt)).append("</span></header>")
+                .append("<div class=capture-statistics>")
+                .append(captureMetric("targets", processed + "/" + progress.targets(),
+                        "Targets processed", progress.targetsActive() + " active · " +
+                                progress.targetsQueued() + " waiting · " +
+                                progress.targetsFailed() + " failed"))
+                .append(captureMetric("posts", Integer.toString(progress.posts()),
+                        "Posts captured", progress.pages() + " pages fetched"))
+                .append(captureMetric("media", Integer.toString(progress.mediaCaptured()),
+                        "Media files", progress.mediaFailed() + " failed · " +
+                                progress.mediaSkipped() + " skipped"))
+                .append(captureMetric("video", Integer.toString(progress.videoCaptured()),
+                        "Video files", progress.videoFailed() + " failed · " +
+                                progress.videoSkipped() + " skipped"))
+                .append(captureMetric("queued", Integer.toString(resourcesQueued),
+                        "Resources queued", progress.mediaQueued() + " media · " +
+                                progress.videoQueued() + " video"))
+                .append(captureMetric("bytes", humanBytes(progress.bytes()),
+                        "Media data", "Captured media and video bytes"))
+                .append("</div></div>")
+                .toString();
+    }
+
+    private static String captureMetric(
+            String key, String value, String label, String detail) {
+        return "<div data-stat=" + key + "><strong>" + value +
+                "</strong><span>" + label + "</span><small>" + detail +
+                "</small></div>";
+    }
+
+    private static String humanBytes(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        String[] units = {"KiB", "MiB", "GiB", "TiB"};
+        double value = bytes;
+        int unit = -1;
+        do {
+            value /= 1024;
+            unit++;
+        } while (value >= 1024 && unit < units.length - 1);
+        return String.format(Locale.ROOT, "%.1f %s", value, units[unit]);
+    }
+
+    private static String elapsed(Instant startedAt, Instant finishedAt) {
+        long seconds = Math.max(0,
+                Duration.between(
+                        startedAt,
+                        finishedAt == null ? Instant.now() : finishedAt)
+                        .toSeconds());
+        long hours = seconds / 3600;
+        long minutes = seconds % 3600 / 60;
+        if (hours > 0) {
+            return hours + "h " + minutes + "m";
+        }
+        if (minutes > 0) {
+            return minutes + "m " + seconds % 60 + "s";
+        }
+        return seconds + "s";
     }
 
     private static String statusBadge(ArchiveController.Status status) {

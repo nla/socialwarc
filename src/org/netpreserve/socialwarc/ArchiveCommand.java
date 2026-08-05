@@ -11,6 +11,7 @@ import org.netpreserve.socialwarc.common.MediaCaptureStats;
 import org.netpreserve.socialwarc.common.MediaCapturer;
 import org.netpreserve.socialwarc.common.MediaSink;
 import org.netpreserve.socialwarc.common.ProgressReporter;
+import org.netpreserve.socialwarc.common.collection.CollectionJob;
 import org.netpreserve.socialwarc.mastodon.MastodonAccountArchiver;
 import org.netpreserve.socialwarc.mastodon.MastodonAccountReference;
 import org.netpreserve.socialwarc.mastodon.MastodonLocalTimelineArchiver;
@@ -36,6 +37,12 @@ public final class ArchiveCommand {
     }
 
     public static int run(String[] args, PrintStream out, PrintStream err) {
+        return run(args, out, err, ProgressListener.NONE);
+    }
+
+    public static int run(
+            String[] args, PrintStream out, PrintStream err,
+            ProgressListener progressListener) {
         try {
             ArchiveOptions options = ArchiveOptions.parse(args);
             if (options.help()) {
@@ -43,7 +50,8 @@ public final class ArchiveCommand {
                 return 0;
             }
             if (options.collection() != null) {
-                return new CollectionArchiveRunner(options, out, err).run();
+                return new CollectionArchiveRunner(
+                        options, out, err, progressListener).run();
             }
             archiveAccount(options, out, err);
             return 0;
@@ -53,6 +61,39 @@ public final class ArchiveCommand {
         } catch (IOException e) {
             err.println("archive failed: " + e.getMessage());
             return 1;
+        }
+    }
+
+    public interface ProgressListener {
+        ProgressListener NONE = new ProgressListener() {
+        };
+
+        default void targetsScheduled(int targets) {
+        }
+
+        default void targetUpdated(TargetProgress progress) {
+        }
+
+        default void targetCompleted(TargetProgress progress) {
+        }
+
+        default void targetFailed(String key) {
+        }
+    }
+
+    public record TargetProgress(
+            String key, String account, int posts, int pages,
+            int mediaCaptured, int mediaFailed, int mediaSkipped,
+            long mediaBytes, int videoCaptured, int videoFailed,
+            int videoSkipped, long videoBytes, int mediaQueued,
+            int videoQueued) {
+        static TargetProgress from(CollectionJob job) {
+            return new TargetProgress(
+                    job.key, job.account, job.postsArchived, job.pagesFetched,
+                    job.mediaCaptured, job.mediaFailed, job.mediaSkipped,
+                    job.mediaBytes, job.videoCaptured, job.videoFailed,
+                    job.videoSkipped, job.videoBytes,
+                    job.pendingMedia.size(), job.pendingVideo.size());
         }
     }
 

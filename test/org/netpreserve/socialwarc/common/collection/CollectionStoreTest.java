@@ -184,6 +184,7 @@ class CollectionStoreTest {
             store.saveJob(job);
             var media = root.resolve("warcs/socialwarc-media-test.warc.open");
             var video = root.resolve("warcs/socialwarc-video-test.warc.open");
+            var queuedCounts = new java.util.ArrayList<Integer>();
 
             try (var sink = new SplitCheckpointingMediaSink(
                     store,
@@ -194,7 +195,10 @@ class CollectionStoreTest {
                     1024,
                     4096,
                     false,
-                    ProgressReporter.NONE)) {
+                    ProgressReporter.NONE,
+                    updated -> queuedCounts.add(
+                            updated.pendingMedia.size() +
+                                    updated.pendingVideo.size()))) {
                 sink.discover(java.util.List.of("file:///image.jpg"));
                 sink.discoverVideo(java.util.List.of("file:///video.mp4"));
                 sink.drain();
@@ -207,6 +211,8 @@ class CollectionStoreTest {
             assertTrue(resumed.seenVideo.contains("file:///video.mp4"));
             assertEquals(1, resumed.mediaSkipped);
             assertEquals(1, resumed.videoSkipped);
+            assertTrue(queuedCounts.contains(2));
+            assertEquals(0, queuedCounts.getLast());
             assertTrue(Files.exists(media));
             assertTrue(Files.exists(video));
         } finally {

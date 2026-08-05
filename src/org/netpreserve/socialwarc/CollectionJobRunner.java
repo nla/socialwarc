@@ -28,18 +28,21 @@ final class CollectionJobRunner {
     private final ProgressReporter progress;
     private final CollectionRunWriters runWriters;
     private final CollectionState collectionState;
+    private final ArchiveCommand.ProgressListener progressListener;
 
     CollectionJobRunner(
             CollectionStore store,
             ArchiveOptions options,
             PrintStream out,
             ProgressReporter progress,
-            CollectionRunWriters runWriters) {
+            CollectionRunWriters runWriters,
+            ArchiveCommand.ProgressListener progressListener) {
         this.store = store;
         this.options = options;
         this.out = out;
         this.progress = progress;
         this.runWriters = runWriters;
+        this.progressListener = progressListener;
         collectionState = runWriters.state();
     }
 
@@ -66,11 +69,13 @@ final class CollectionJobRunner {
         } else {
             resumeJob(accountArgument, job);
         }
+        progressListener.targetUpdated(ArchiveCommand.TargetProgress.from(job));
 
         runJob(
                 accountArgument, platform, job);
 
         finalizeJob(job);
+        progressListener.targetCompleted(ArchiveCommand.TargetProgress.from(job));
         store.log("ACCOUNT-COMPLETE " + platformName + " " +
                 accountArgument + " posts=" + job.postsArchived +
                 " shared-collection-warc");
@@ -222,6 +227,8 @@ final class CollectionJobRunner {
                 job.pagesFetched = page.pagesFetched();
                 job.posts.setCommittedOffset(writer.position());
                 store.saveJob(job);
+                progressListener.targetUpdated(
+                        ArchiveCommand.TargetProgress.from(job));
             };
             if (platform == ArchivePlatform.MASTODON) {
                 if (job.localTimeline) {
@@ -319,7 +326,9 @@ final class CollectionJobRunner {
                 job.maxMediaBytes,
                 job.maxTotalMediaBytes,
                 job.allVideoVariants,
-                progress);
+                progress,
+                updated -> progressListener.targetUpdated(
+                        ArchiveCommand.TargetProgress.from(updated)));
     }
 
     private static ArchiveRunOptions runOptions(CollectionJob job) {
