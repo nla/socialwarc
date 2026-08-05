@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.jsoup.Jsoup;
 import org.netpreserve.jwarc.WarcReader;
 import org.netpreserve.jwarc.WarcResponse;
+import org.netpreserve.socialwarc.ArchiveCommand;
 import org.netpreserve.socialwarc.CliSupport;
 import org.netpreserve.socialwarc.common.ProgressReporter;
 import org.netpreserve.socialwarc.common.SocialJson;
@@ -337,11 +338,17 @@ public final class SocialWarcServer implements AutoCloseable {
         Map<String, String> form = form(exchange);
         requireCsrf(form);
         int interval = parseInt(form.get("intervalHours"), 24);
+        String userAgent = form.getOrDefault(
+                "userAgent", ArchiveCommand.DEFAULT_USER_AGENT).trim();
+        if (userAgent.isEmpty() || userAgent.length() > 512 ||
+                userAgent.indexOf('\r') >= 0 || userAgent.indexOf('\n') >= 0) {
+            throw new IllegalArgumentException("Invalid HTTP User-Agent");
+        }
         archiveController.update(new ArchiveController.Settings(
-                "true".equals(form.get("enabled")), interval,
+                userAgent, "true".equals(form.get("enabled")), interval,
                 "true".equals(form.get("includeMedia")),
                 "true".equals(form.get("includeVideo"))));
-        redirect(exchange, "/manage?message=Schedule+saved");
+        redirect(exchange, "/manage?message=Capture+settings+saved");
     }
 
     private void updateAccountState(HttpExchange exchange) throws IOException {

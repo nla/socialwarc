@@ -26,14 +26,13 @@ record ArchiveOptions(
         int maxPages,
         boolean help) {
 
-    static final String DEFAULT_USER_AGENT = "socialwarc/0.1.0";
     static final long DEFAULT_MAX_MEDIA_BYTES = 100L * 1024 * 1024;
     static final long DEFAULT_MAX_TOTAL_MEDIA_BYTES = 1024L * 1024 * 1024;
 
     static ArchiveOptions parse(String[] args) {
         Path output = null;
         Path collection = null;
-        String userAgent = DEFAULT_USER_AGENT;
+        String userAgent = ArchiveCommand.DEFAULT_USER_AGENT;
         String service = null;
         String account = null;
         Integer pageSize = null;
@@ -127,7 +126,7 @@ record ArchiveOptions(
         return new ArchiveOptions(
                 null,
                 null,
-                DEFAULT_USER_AGENT,
+                ArchiveCommand.DEFAULT_USER_AGENT,
                 null,
                 null,
                 null,

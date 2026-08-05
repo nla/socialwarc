@@ -118,10 +118,12 @@ Then open `http://127.0.0.1:8080/`. The Browse area supports full-text search,
 platform, author, date and media filters, recorded post details, and playback
 of media stored in completed collection WARCs. It never fetches missing
 resources from the live web. The Manage area edits `accounts.txt`, starts and
-monitors captures, and persists a recurring interval schedule in
-`state/archive-schedule.properties`. Scheduled runs occur while the `serve`
-process is running. Use `--host` and `--port` to change the listening address;
-the default is accessible only from the local machine. For safety, the Manage
+monitors captures, and persists capture settings—including the HTTP User-Agent
+and recurring interval schedule—in `state/archive-schedule.properties`.
+The User-Agent applies to manual and scheduled captures. Scheduled runs occur
+while the `serve` process is running. Use `--host` and `--port` to change the
+listening address; the default is accessible only from the local machine. For
+safety, the Manage
 area accepts connections only from the local machine even when Browse is bound
 to a network-accessible address. Failed targets and their last error appear on
 the Manage page, where they can be disabled, re-enabled, or cleared.

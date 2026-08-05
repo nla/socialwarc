@@ -119,6 +119,9 @@ class SocialWarcServerTest {
                 String token = document.selectFirst("input[name=csrf]")
                         .attr("value");
                 assertTrue(document.selectFirst("textarea[name=accounts]") != null);
+                assertEquals(
+                        "socialwarc/0.1.0",
+                        document.selectFirst("input[name=userAgent]").val());
 
                 var rejected = postForm(
                         client, base.resolve("/manage/accounts"),
@@ -138,6 +141,8 @@ class SocialWarcServerTest {
                 var scheduled = postForm(
                         client, base.resolve("/manage/schedule"),
                         "csrf=" + encode(token) +
+                                "&userAgent=" + encode(
+                                "Archive Bot/2.0 (admin@example.org)") +
                                 "&enabled=true&intervalHours=12" +
                                 "&includeMedia=true&includeVideo=true");
                 assertEquals(303, scheduled.statusCode());
@@ -145,6 +150,21 @@ class SocialWarcServerTest {
                         .resolve("archive-schedule.properties"));
                 assertTrue(properties.contains("enabled=true"));
                 assertTrue(properties.contains("intervalHours=12"));
+                assertTrue(properties.contains(
+                        "userAgent=Archive Bot/2.0 (admin@example.org)"));
+
+                var updatedManage = client.send(
+                        HttpRequest.newBuilder(base.resolve("/manage")).build(),
+                        BodyHandlers.ofString());
+                assertEquals(
+                        "Archive Bot/2.0 (admin@example.org)",
+                        Jsoup.parse(updatedManage.body())
+                                .selectFirst("input[name=userAgent]").val());
+                try (var reloaded = new ArchiveController(store)) {
+                    assertEquals(
+                            "Archive Bot/2.0 (admin@example.org)",
+                            reloaded.status().settings().userAgent());
+                }
 
                 Files.delete(store.accountsFile());
                 var notReady = client.send(

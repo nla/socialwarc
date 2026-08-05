@@ -145,6 +145,7 @@ button.danger { color: #b42318; border: 1px solid #b42318; background: #fff; }
 .schedule-form { display: grid; gap: .55rem; }
 .schedule-form label:not(.check) { display: grid; gap: .2rem; }
 .schedule-form input[type=number] { width: 5rem; }
+.schedule-form input[type=text] { width: 100%; }
 .check { display: flex; align-items: center; gap: .3rem; }
 
 .panel-log header { display: flex; align-items: baseline; justify-content: space-between; }

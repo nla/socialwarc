@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.UUID;
 
 public final class ArchiveCommand {
+    public static final String DEFAULT_USER_AGENT = "socialwarc/0.1.0";
     private static final String ARCHIVE_COMMAND = "archive";
 
     private ArchiveCommand() {
@@ -470,7 +471,7 @@ public final class ArchiveCommand {
                 "  -o, --output FILE      Output path");
         stream.println(
                 "  -A, --user-agent TEXT  HTTP User-Agent (default: " +
-                        ArchiveOptions.DEFAULT_USER_AGENT + ")");
+                        DEFAULT_USER_AGENT + ")");
         stream.println(
                 "  --page-size NUMBER     Items per API request");
         stream.println(

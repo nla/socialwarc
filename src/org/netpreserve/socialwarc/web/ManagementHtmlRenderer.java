@@ -55,13 +55,18 @@ final class ManagementHtmlRenderer {
             html.append("<form method=post action=/manage/run>").append(token(csrf))
                     .append("<button class=primary>Start capture</button></form>");
         }
-        html.append("</section><section class=panel><h2>Schedule captures</h2><form method=post action=/manage/schedule class=schedule-form>")
-                .append(token(csrf)).append(check("enabled", "Capture automatically", status.settings().enabled()))
+        html.append("</section><section class=panel><h2>Capture settings</h2>")
+                .append("<p class=hint>Used for manual and scheduled captures.</p>")
+                .append("<form method=post action=/manage/schedule class=schedule-form>")
+                .append(token(csrf))
+                .append("<label>HTTP User-Agent<input name=userAgent type=text maxlength=512 required autocomplete=off spellcheck=false value=\"")
+                .append(escape(status.settings().userAgent())).append("\"></label>")
+                .append(check("enabled", "Capture automatically", status.settings().enabled()))
                 .append("<label>Repeat every <span><input name=intervalHours type=number min=1 max=8760 value=")
                 .append(status.settings().intervalHours()).append("> hours</span></label>")
                 .append(check("includeMedia", "Capture linked media", status.settings().includeMedia()))
                 .append(check("includeVideo", "Include video", status.settings().includeVideo()))
-                .append("<button>Save schedule</button></form>");
+                .append("<button>Save settings</button></form>");
         if (status.nextRun() != null) {
             html.append("<p class=hint>Next run: ").append(TIME.format(status.nextRun())).append("</p>");
         }

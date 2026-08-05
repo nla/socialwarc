@@ -36,7 +36,7 @@ final class ArchiveController implements AutoCloseable {
             .ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneId.systemDefault());
 
-    record Settings(boolean enabled, int intervalHours,
+    record Settings(String userAgent, boolean enabled, int intervalHours,
                     boolean includeMedia, boolean includeVideo) {
     }
 
@@ -168,12 +168,13 @@ final class ArchiveController implements AutoCloseable {
         var sink = new PrintStream(lineOutput(), true, StandardCharsets.UTF_8);
         int result;
         try (sink) {
-            List<String> arguments = new ArrayList<>(List.of(
-                    "archive", "--collection", store.root().toString()));
             Settings current;
             synchronized (this) {
                 current = settings;
             }
+            List<String> arguments = new ArrayList<>(List.of(
+                    "archive", "--collection", store.root().toString(),
+                    "--user-agent", current.userAgent()));
             if (current.includeMedia()) {
                 arguments.add("--include-media");
                 if (!current.includeVideo()) {
@@ -236,6 +237,8 @@ final class ArchiveController implements AutoCloseable {
             }
         }
         return new Settings(
+                properties.getProperty(
+                        "userAgent", ArchiveCommand.DEFAULT_USER_AGENT),
                 Boolean.parseBoolean(properties.getProperty("enabled", "false")),
                 parseInterval(properties.getProperty("intervalHours", "24")),
                 Boolean.parseBoolean(properties.getProperty("includeMedia", "true")),
@@ -253,6 +256,7 @@ final class ArchiveController implements AutoCloseable {
 
     private void saveSettings() throws IOException {
         var properties = new Properties();
+        properties.setProperty("userAgent", settings.userAgent());
         properties.setProperty("enabled", Boolean.toString(settings.enabled()));
         properties.setProperty("intervalHours", Integer.toString(settings.intervalHours()));
         properties.setProperty("includeMedia", Boolean.toString(settings.includeMedia()));
