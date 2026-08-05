@@ -1,9 +1,9 @@
-# Warcana
+# SocialWARC
 
-Warcana archives public Mastodon and Bluesky accounts and Mastodon local
-public timelines to WARC, captures linked media, extracts a common social-post
-model, and provides full-text search. It can also index Threads profile pages
-and legacy Twitter responses found in existing WARCs.
+SocialWARC is a tool for working with social media web archive data. It can search
+Mastodon, Bluesky, Threads and Twitter posts in WARC files (that were collected 
+separately using a browser-based crawler). It can also capture Mastodon and Bluesky
+accounts and attached media to WARC using their public APIs.
 
 It requires Java 21 or newer.
 
@@ -11,7 +11,7 @@ It requires Java 21 or newer.
 
 ```sh
 mvn package
-java -jar target/warcana-0.1.0.jar --help
+java -jar target/socialwarc-0.1.0.jar --help
 ```
 
 ## Collections
@@ -19,7 +19,7 @@ java -jar target/warcana-0.1.0.jar --help
 A collection is the recommended way to run recurring captures:
 
 ```sh
-java -jar target/warcana-0.1.0.jar init collection
+java -jar target/socialwarc-0.1.0.jar init collection
 ```
 
 This creates:
@@ -49,7 +49,7 @@ bluesky alice.bsky.social
 Then archive the collection:
 
 ```sh
-java -jar target/warcana-0.1.0.jar archive \
+java -jar target/socialwarc-0.1.0.jar archive \
   --collection collection \
   --include-media
 ```
@@ -57,16 +57,16 @@ java -jar target/warcana-0.1.0.jar archive \
 All accounts processed by one collection run share three independently
 rolling WARC streams:
 
-- `warcana-posts-*.warc.gz` contains gzip-compressed API requests and responses.
-- `warcana-media-*.warc` contains images, previews, avatars, and other
+- `socialwarc-posts-*.warc.gz` contains gzip-compressed API requests and responses.
+- `socialwarc-media-*.warc` contains images, previews, avatars, and other
   non-video media.
-- `warcana-video-*.warc` contains video resources, HLS playlists, and their
+- `socialwarc-video-*.warc` contains video resources, HLS playlists, and their
   dependent segments.
 
 Each stream closes at the next complete HTTP exchange boundary after reaching
 1 GiB. Media and video WARCs are created lazily only when the run discovers
 resources of that type. Completed WARCs are never modified. On later runs,
-Warcana fetches the newest pages until it reaches the last identity recorded
+SocialWARC fetches the newest pages until it reaches the last identity recorded
 for each target.
 
 While a job is running, its active WARCs have a `.open` suffix and their state is
@@ -87,7 +87,7 @@ WARCs, including small ones, so they are ready for permanent ingest.
 Bounds are stored with a job and therefore remain stable across restarts:
 
 ```sh
-java -jar target/warcana-0.1.0.jar archive \
+java -jar target/socialwarc-0.1.0.jar archive \
   --collection collection \
   --since 2026-01-01 \
   --max-posts 5000 \
@@ -95,13 +95,12 @@ java -jar target/warcana-0.1.0.jar archive \
 ```
 
 API responses are preserved verbatim, so the final fetched page can contain
-records just outside a requested boundary. Bounds determine pagination and
-media selection rather than rewriting the captured response.
+records just outside a requested boundary.
 
 Search all completed WARCs in a collection:
 
 ```sh
-java -jar target/warcana-0.1.0.jar search collection "climate archive"
+java -jar target/socialwarc-0.1.0.jar search collection "climate archive"
 ```
 
 The index is rebuilt automatically whenever the completed WARC set changes.
@@ -112,7 +111,7 @@ also recognized and can be filtered with `--platform threads` or
 Browse and manage a collection in the local interface:
 
 ```sh
-java -jar target/warcana-0.1.0.jar serve collection
+java -jar target/socialwarc-0.1.0.jar serve collection
 ```
 
 Then open `http://127.0.0.1:8080/`. The Browse area supports full-text search,
@@ -127,6 +126,11 @@ area accepts connections only from the local machine even when Browse is bound
 to a network-accessible address. Failed targets and their last error appear on
 the Manage page, where they can be disabled, re-enabled, or cleared.
 
+`GET /health` is a liveness probe. `GET /ready` is a readiness probe that
+checks the collection structure, configuration, state, and WARC source list;
+it returns HTTP 503 when they cannot be read. Both endpoints return JSON and
+do not require management authentication.
+
 ### Optional OpenID Connect
 
 The Manage area can use Keycloak OpenID Connect instead of the loopback-only
@@ -134,23 +138,23 @@ check. Users must have the `panadmin` realm role (configurable). Configure a
 confidential client with standard flow enabled and this callback URL:
 
 ```text
-https://warcana.example/oidc/callback
+https://socialwarc.example/oidc/callback
 ```
 
 Set the following environment variables when starting `serve`:
 
 ```sh
-WARCANA_COLLECTION=/collections/social \
-WARCANA_HOST=0.0.0.0 \
-WARCANA_PORT=8080 \
-WARCANA_PUBLIC_URL=https://warcana.example/ \
-WARCANA_OIDC_ISSUER=https://keycloak.example/realms/archive \
-WARCANA_OIDC_CLIENT_ID=warcana \
-WARCANA_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc-client-secret \
-java -jar target/warcana-0.1.0.jar serve
+SOCIALWARC_COLLECTION=/collections/social \
+SOCIALWARC_HOST=0.0.0.0 \
+SOCIALWARC_PORT=8080 \
+SOCIALWARC_PUBLIC_URL=https://socialwarc.example/ \
+SOCIALWARC_OIDC_ISSUER=https://keycloak.example/realms/archive \
+SOCIALWARC_OIDC_CLIENT_ID=socialwarc \
+SOCIALWARC_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc-client-secret \
+java -jar target/socialwarc-0.1.0.jar serve
 ```
 
-`WARCANA_OIDC_CLIENT_SECRET` may be used instead of the mounted secret file.
+`SOCIALWARC_OIDC_CLIENT_SECRET` may be used instead of the mounted secret file.
 OIDC is disabled when the OIDC variables are absent. The public URL currently
 must be an origin without a path component.
 
@@ -160,8 +164,8 @@ To ingest each completed scheduled run into Bamboo, set the Bamboo URL and
 destination crawl-series ID:
 
 ```sh
-WARCANA_BAMBOO_URL=https://pandas.example/bamboo \
-WARCANA_BAMBOO_SERIES_ID=1234
+SOCIALWARC_BAMBOO_URL=https://pandas.example/bamboo \
+SOCIALWARC_BAMBOO_SERIES_ID=1234
 ```
 
 Completed run WARCs are placed in a durable outbox before upload. Temporary
@@ -173,18 +177,17 @@ Existing Bamboo crawl series can be included in Browse and Search by listing
 their IDs:
 
 ```sh
-WARCANA_BAMBOO_INDEX_SERIES_IDS=1234,5678
+SOCIALWARC_BAMBOO_INDEX_SERIES_IDS=1234,5678
 ```
 
-Warcana indexes those WARCs directly from Bamboo using HTTP range requests.
-It does not download or retain complete Bamboo WARCs locally; Bamboo remains
-the authoritative long-term copy. The list is read when `serve` starts, so
-restart the process after adding crawls externally.
+SocialWARC indexes those WARCs directly from Bamboo using HTTP range requests.
+The list is read when `serve` starts, so restart the process after adding 
+crawls externally.
 
 Inspect a collection:
 
 ```sh
-java -jar target/warcana-0.1.0.jar inspect collection
+java -jar target/socialwarc-0.1.0.jar inspect collection
 ```
 
 This reports configured and tracked accounts, completed posts/media/video
@@ -194,8 +197,8 @@ state. Use `--format json` for machine-readable output.
 Individual completed or open WARC files can be inspected in the same way:
 
 ```sh
-java -jar target/warcana-0.1.0.jar inspect \
-  collection/warcs/warcana-posts-example.warc
+java -jar target/socialwarc-0.1.0.jar inspect \
+  collection/warcs/socialwarc-posts-example.warc
 ```
 
 WARC inspection reports record types, HTTP statuses, record dates, extracted
@@ -207,7 +210,7 @@ Single-file capture remains available and now writes through a temporary file
 before atomically publishing the requested destination:
 
 ```sh
-java -jar target/warcana-0.1.0.jar archive \
+java -jar target/socialwarc-0.1.0.jar archive \
   --include-media \
   --since 2026-01-01 \
   --max-posts 1000 \
@@ -219,7 +222,7 @@ Archive the public posts originating on one Mastodon server with the local
 timeline endpoint:
 
 ```sh
-java -jar target/warcana-0.1.0.jar archive \
+java -jar target/socialwarc-0.1.0.jar archive \
   --local-timeline \
   --include-media \
   -o example-social-local.warc \
